@@ -8,8 +8,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Masuk | Job Laundry",
-  description: "Masuk ke akun member Job Laundry.",
+  title: "Job Laundry",
+  description: "Layanan informasi dan transaksi Job Laundry.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
