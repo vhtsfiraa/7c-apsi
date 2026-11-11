@@ -1,47 +1,73 @@
 import Link from "next/link";
 import { DashboardShell } from "@/app/components/dashboard-shell";
 import { requireRole } from "@/app/lib/auth";
-import { DISCOUNT_REDEMPTION_COINS } from "@/app/lib/laundry";
 import { getPrismaClient } from "@/app/lib/prisma";
 
 export const instant = false;
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function MemberPage() {
-  const member = await requireRole("Member");
+  const session = await requireRole("Member");
   const prisma = getPrismaClient();
-  const [profile, transactions, unreadNotifications] = await Promise.all([
-    prisma.users.findUnique({
-      where: { id_user: member.userId },
-      select: {
-        id_user: true,
-        nama: true,
-        nomor_telepon: true,
-        koin_saldo: true,
-      },
+  const [profile, coinTransactions, transactions, transactionCount, completedNotifications] = await Promise.all([
+    prisma.member.findUnique({
+      where: { ID_Member: session.userId },
+      select: { ID_Member: true, Nama_Member: true, No_HP: true },
     }),
     prisma.transaksi.findMany({
-      where: { id_user: member.userId },
-      orderBy: { tanggal: "desc" },
+      where: { ID_Member: session.userId },
+      select: { Koin_Didapat: true, Koin_Ditukar: true },
+    }),
+    prisma.transaksi.findMany({
+      where: { AND: [{ ID_Member: session.userId }, laundryTransactionFilter] },
+      orderBy: { Tgl_Jam_Transaksi: "desc" },
       take: 3,
       select: {
-        id_transaksi: true,
-        nama_barang: true,
-        tanggal: true,
-        status_laundry: { select: { nama_status: true } },
+        Kode_Transaksi: true,
+        Tgl_Jam_Transaksi: true,
+        statusProses: {
+          orderBy: { Waktu_Status: "desc" },
+          take: 1,
+          select: { status: { select: { Nama_Status: true } } },
+        },
       },
     }),
-    prisma.notifikasi.count({
-      where: { id_user: member.userId, dibaca_pada: null },
+    prisma.transaksi.count({
+      where: { AND: [{ ID_Member: session.userId }, laundryTransactionFilter] },
+    }),
+    prisma.transaksi.count({
+      where: {
+        AND: [
+          { ID_Member: session.userId },
+          laundryTransactionFilter,
+          { Waktu_Notifikasi_Selesai: { not: null } },
+        ],
+      },
     }),
   ]);
   if (!profile) throw new Error("Data Member pada sesi tidak ditemukan.");
 
-  const memberCode = `MBR-${String(profile.id_user).padStart(3, "0")}`;
+  const coinBalance = coinTransactions.reduce(
+    (total, transaction) =>
+      total + (transaction.Koin_Didapat ?? 0) - (transaction.Koin_Ditukar ?? 0),
+    0,
+  );
 
   return (
     <DashboardShell
       heading="Dashboard Member"
-      identity={`${profile.nama} · ${memberCode}`}
+      identity={`${profile.Nama_Member} · ${profile.ID_Member}`}
       activeHref="/member"
       role="Member"
     >
@@ -51,15 +77,11 @@ export default async function MemberPage() {
       >
         <article className="rounded-xl border border-[#e2e8f0] bg-white px-5 py-4 sm:px-6">
           <h2 className="text-[13px] font-medium text-[#64748b]">Saldo Koin</h2>
-          <p className="mt-2 text-xl font-bold">{profile.koin_saldo} koin</p>
+          <p className="mt-2 text-xl font-bold">{coinBalance} koin</p>
         </article>
         <article className="rounded-xl border border-[#e2e8f0] bg-white px-5 py-4 sm:px-6">
-          <h2 className="text-[13px] font-medium text-[#64748b]">Status Diskon</h2>
-          <p className="mt-2 text-xl font-bold">
-            {profile.koin_saldo >= DISCOUNT_REDEMPTION_COINS
-              ? "Berhak Diskon 25%"
-              : "Koin Belum Cukup"}
-          </p>
+          <h2 className="text-[13px] font-medium text-[#64748b]">Transaksi Laundry</h2>
+          <p className="mt-2 text-xl font-bold">{transactionCount} transaksi</p>
         </article>
       </section>
 
@@ -73,15 +95,15 @@ export default async function MemberPage() {
         <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
           <div>
             <dt className="text-xs text-[#64748b]">Nama Member</dt>
-            <dd className="mt-1 font-semibold">{profile.nama}</dd>
+            <dd className="mt-1 font-semibold">{profile.Nama_Member}</dd>
           </div>
           <div>
             <dt className="text-xs text-[#64748b]">ID Member</dt>
-            <dd className="mt-1 font-semibold">{memberCode}</dd>
+            <dd className="mt-1 font-semibold">{profile.ID_Member}</dd>
           </div>
           <div>
             <dt className="text-xs text-[#64748b]">No. HP</dt>
-            <dd className="mt-1 font-semibold">{profile.nomor_telepon ?? "—"}</dd>
+            <dd className="mt-1 font-semibold">{profile.No_HP ?? "—"}</dd>
           </div>
         </dl>
       </section>
@@ -107,7 +129,7 @@ export default async function MemberPage() {
             },
             {
               title: "Notifikasi Status Pakaian",
-              description: `${unreadNotifications} notifikasi belum dibaca.`,
+              description: `${completedNotifications} transaksi telah mencatat notifikasi selesai.`,
               href: "/member/notifikasi",
             },
           ].map((feature) => (
@@ -147,12 +169,12 @@ export default async function MemberPage() {
             {transactions.map((transaction) => (
               <li
                 className="flex flex-wrap justify-between gap-2 py-3 text-sm"
-                key={transaction.id_transaksi}
+                key={transaction.Kode_Transaksi}
               >
-                <span>{transaction.nama_barang}</span>
+                <span>{transaction.Kode_Transaksi}</span>
                 <span className="font-medium text-[#64748b]">
-                  {transaction.status_laundry?.nama_status ?? "Menunggu status"} ·{" "}
-                  {transaction.tanggal.toLocaleDateString("id-ID")}
+                  {transaction.statusProses[0]?.status.Nama_Status ?? "Belum ditetapkan"} ·{" "}
+                  {transaction.Tgl_Jam_Transaksi.toLocaleDateString("id-ID")}
                 </span>
               </li>
             ))}

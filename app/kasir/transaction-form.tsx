@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-type MemberOption = { id_user: number; nama: string; nomor_telepon: string | null };
+type MemberOption = { ID_Member: string; Nama_Member: string; No_HP: string | null };
 type TransactionResponse = {
   error?: string;
   transaction?: { total_bayar: string | number | null };
@@ -34,13 +34,13 @@ export function KasirTransactionForm({ members }: { members: MemberOption[] }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id_user: Number(formData.get("id_user")),
+          id_user: formData.get("ID_Member"),
           nama_barang: formData.get("nama_barang"),
           jenis_layanan: formData.get("jenis_layanan"),
           jumlah: Number(formData.get("jumlah") || 1),
           berat_kg: weight || null,
           harga_satuan: formData.get("harga_satuan"),
-          estimasi_selesai: formData.get("estimasi_selesai") || null,
+          catatan_pakaian: formData.get("catatan_pakaian"),
           gunakan_diskon: formData.get("gunakan_diskon") === "on",
         }),
       });
@@ -78,14 +78,14 @@ export function KasirTransactionForm({ members }: { members: MemberOption[] }) {
       <div className="grid gap-5 sm:grid-cols-2">
         <label className="field">
           <span>Member</span>
-          <select className={fieldClass} defaultValue="" name="id_user" required>
+          <select className={fieldClass} defaultValue="" name="ID_Member" required>
             <option disabled value="">
               Pilih Member
             </option>
             {members.map((member) => (
-              <option key={member.id_user} value={member.id_user}>
-                MBR-{String(member.id_user).padStart(3, "0")} · {member.nama}{" "}
-                {member.nomor_telepon ? `(${member.nomor_telepon})` : ""}
+              <option key={member.ID_Member} value={member.ID_Member}>
+                {member.ID_Member} · {member.Nama_Member}{" "}
+                {member.No_HP ? `(${member.No_HP})` : ""}
               </option>
             ))}
           </select>
@@ -116,7 +116,7 @@ export function KasirTransactionForm({ members }: { members: MemberOption[] }) {
           <span>Berat (kg), jika layanan kiloan</span>
           <input
             className={fieldClass}
-            max="9999"
+            max="999.99"
             min="0.01"
             name="berat_kg"
             placeholder="Contoh: 4,5"
@@ -143,18 +143,22 @@ export function KasirTransactionForm({ members }: { members: MemberOption[] }) {
           <span>Harga Satuan (Rp/kg atau Rp/pcs)</span>
           <input
             className={fieldClass}
-            min="0.01"
+            min="1"
             name="harga_satuan"
             placeholder="Contoh: 12000"
             required
-            step="0.01"
+            step="1"
             type="number"
           />
         </label>
-
         <label className="field">
-          <span>Estimasi Selesai (opsional)</span>
-          <input className={fieldClass} name="estimasi_selesai" type="datetime-local" />
+          <span>Catatan Pakaian (opsional)</span>
+          <input
+            className={fieldClass}
+            maxLength={1000}
+            name="catatan_pakaian"
+            placeholder="Catatan khusus"
+          />
         </label>
       </div>
 
@@ -163,7 +167,7 @@ export function KasirTransactionForm({ members }: { members: MemberOption[] }) {
         Gunakan 10 koin untuk diskon 25%
       </label>
       <p className="mt-1 text-xs text-[#64748b]">
-        Diskon dipotong atomik bersama saldo koin; transaksi ditolak bila saldo tidak mencukupi.
+        Koin yang diperoleh dan ditukarkan tercatat di transaksi.
       </p>
 
       <button

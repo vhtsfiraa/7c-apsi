@@ -3,10 +3,9 @@ import { getPrismaClient } from "@/app/lib/prisma";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-function parseId(value: string) {
-  const id = Number(value);
-  return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(id) && id <= 2_147_483_647
-    ? id
+function validMemberId(value: string) {
+  return value.length > 0 && value.length <= 20 && !/[\u0000-\u001f]/.test(value)
+    ? value
     : null;
 }
 
@@ -14,8 +13,8 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   const authorization = await authorizeApiRole("Kasir");
   if (authorization.response) return authorization.response;
   const { id: rawId } = await params;
-  const id = parseId(rawId);
-  if (id === null) return Response.json({ error: "ID Member tidak valid." }, { status: 400 });
+  const id = validMemberId(rawId);
+  if (!id) return Response.json({ error: "ID Member tidak valid." }, { status: 400 });
 
   let body: unknown;
   try {
@@ -27,39 +26,62 @@ export async function PATCH(request: Request, { params }: RouteContext) {
     return Response.json({ error: "Data Member harus berupa objek." }, { status: 400 });
   }
   const data = body as Record<string, unknown>;
-  const nama = typeof data.nama === "string" ? data.nama.trim() : "";
-  const phone = typeof data.nomor_telepon === "string" ? data.nomor_telepon.trim() : "";
-  const nomorTelepon = phone.replace(/\D/g, "");
-  if (!nama || nama.length > 100) {
-    return Response.json({ error: "Nama lengkap wajib diisi (maksimal 100 karakter)." }, { status: 400 });
+  const nameValue = data.nama ?? data.Nama_Member;
+  const phoneValue = data.nomor_telepon ?? data.No_HP;
+  const name = typeof nameValue === "string" ? nameValue.trim() : "";
+  const phoneInput = typeof phoneValue === "string"
+    ? phoneValue.trim()
+    : "";
+  const phone = phoneInput.replace(/\D/g, "");
+  const genderValue = data.gender ?? data.Gender_Member;
+  const gender = typeof genderValue === "string" ? genderValue.trim() : undefined;
+  if (!name || name.length > 100) {
+    return Response.json(
+      { error: "Nama lengkap wajib diisi (maksimal 100 karakter)." },
+      { status: 400 },
+    );
   }
-  if (!/^\+?[\d\s().-]{8,24}$/.test(phone) || !/^\d{8,15}$/.test(nomorTelepon)) {
-    return Response.json({ error: "Nomor HP harus berisi 8 sampai 15 digit yang valid." }, { status: 400 });
+  if (!/^\+?[\d\s().-]{8,24}$/.test(phoneInput) || !/^\d{8,15}$/.test(phone)) {
+    return Response.json(
+      { error: "Nomor HP harus berisi 8 sampai 15 digit yang valid." },
+      { status: 400 },
+    );
+  }
+  if (gender !== undefined && gender.length > 20) {
+    return Response.json({ error: "Gender maksimal 20 karakter." }, { status: 400 });
   }
 
   try {
     const prisma = getPrismaClient();
-    const member = await prisma.users.findUnique({
-      where: { id_user: id },
-      select: { role: true },
+    const current = await prisma.member.findUnique({ where: { ID_Member: id } });
+    if (!current) return Response.json({ error: "Member tidak ditemukan." }, { status: 404 });
+    const duplicate = await prisma.member.findFirst({
+      where: { No_HP: phone, ID_Member: { not: id } },
     });
-    if (!member || member.role.toLowerCase() !== "member") {
-      return Response.json({ error: "Member tidak ditemukan." }, { status: 404 });
-    }
-    const updated = await prisma.users.update({
-      where: { id_user: id },
+    if (duplicate) return Response.json({ error: "Nomor HP sudah digunakan." }, { status: 409 });
+
+    const updated = await prisma.member.update({
+      where: { ID_Member: id },
       data: {
-        nama,
-        nomor_telepon: nomorTelepon,
-        username: nomorTelepon,
+        Nama_Member: name,
+        No_HP: phone,
+        ...(gender !== undefined ? { Gender_Member: gender || null } : {}),
       },
-      select: { id_user: true, nama: true, username: true, nomor_telepon: true },
     });
-    return Response.json({ member: updated, message: "Data Member berhasil diperbarui." });
+    return Response.json({
+      member: {
+        ID_Member: updated.ID_Member,
+        Nama_Member: updated.Nama_Member,
+        No_HP: updated.No_HP,
+        id_user: updated.ID_Member,
+        nama: updated.Nama_Member,
+        username: updated.ID_Member,
+        nomor_telepon: updated.No_HP,
+        gender: updated.Gender_Member,
+      },
+      message: "Data Member berhasil diperbarui.",
+    });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "P2002") {
-      return Response.json({ error: "Nomor HP sudah digunakan." }, { status: 409 });
-    }
     console.error("Gagal memperbarui Member:", error);
     return Response.json({ error: "Data Member gagal diperbarui." }, { status: 500 });
   }

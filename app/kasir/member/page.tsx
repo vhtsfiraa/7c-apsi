@@ -7,15 +7,12 @@ export const instant = false;
 
 export default async function KasirMembersPage() {
   const cashier = await requireRole("Kasir");
-  const members = await getPrismaClient().users.findMany({
-    where: { role: { equals: "Member", mode: "insensitive" } },
-    orderBy: { nama: "asc" },
-    select: {
-      id_user: true,
-      nama: true,
-      username: true,
-      nomor_telepon: true,
-      koin_saldo: true,
+  const members = await getPrismaClient().member.findMany({
+    orderBy: { Nama_Member: "asc" },
+    include: {
+      transactions: {
+        select: { Koin_Didapat: true, Koin_Ditukar: true },
+      },
     },
   });
 
@@ -47,35 +44,40 @@ export default async function KasirMembersPage() {
               <tr>
                 <th className="px-3 py-3 font-medium">ID Member</th>
                 <th className="px-3 py-3 font-medium">Nama</th>
-                <th className="px-3 py-3 font-medium">Username</th>
                 <th className="px-3 py-3 font-medium">No. Telepon</th>
                 <th className="px-3 py-3 font-medium">Saldo Koin</th>
                 <th className="px-3 py-3 font-medium">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {members.map((member) => (
-                <tr className="border-t border-[#e2e8f0]" key={member.id_user}>
-                  <td className="px-3 py-3">
-                    MBR-{String(member.id_user).padStart(3, "0")}
-                  </td>
-                  <td className="px-3 py-3">{member.nama}</td>
-                  <td className="px-3 py-3">{member.username}</td>
-                  <td className="px-3 py-3">{member.nomor_telepon ?? "—"}</td>
-                  <td className="px-3 py-3">{member.koin_saldo}</td>
-                  <td className="px-3 py-3">
-                    <Link
-                      className="font-semibold text-[#2563eb] hover:underline"
-                      href={`/kasir/member/${member.id_user}/edit`}
-                    >
-                      Ubah
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+              {members.map((member) => {
+                const balance = member.transactions.reduce(
+                  (total, transaction) =>
+                    total +
+                    (transaction.Koin_Didapat ?? 0) -
+                    (transaction.Koin_Ditukar ?? 0),
+                  0,
+                );
+                return (
+                  <tr className="border-t border-[#e2e8f0]" key={member.ID_Member}>
+                    <td className="px-3 py-3">{member.ID_Member}</td>
+                    <td className="px-3 py-3">{member.Nama_Member}</td>
+                    <td className="px-3 py-3">{member.No_HP ?? "—"}</td>
+                    <td className="px-3 py-3">{balance}</td>
+                    <td className="px-3 py-3">
+                      <Link
+                        className="font-semibold text-[#2563eb] hover:underline"
+                        href={`/kasir/member/${encodeURIComponent(member.ID_Member)}/edit`}
+                      >
+                        Ubah
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
               {members.length === 0 && (
                 <tr>
-                  <td className="px-3 py-6 text-center text-[#64748b]" colSpan={6}>
+                  <td className="px-3 py-6 text-center text-[#64748b]" colSpan={5}>
                     Belum ada member terdaftar.
                   </td>
                 </tr>

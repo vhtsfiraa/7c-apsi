@@ -1,16 +1,9 @@
 import { NextResponse } from "next/server";
-import {
-  createInitialPassword,
-  hashPassword,
-} from "@/app/lib/auth";
+import { createRecordId } from "@/app/api/_lib/erd";
 import { getPrismaClient } from "@/app/lib/prisma";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizePhone(value: string) {
-  return value.replace(/\D/g, "");
 }
 
 export async function POST(request: Request) {
@@ -18,72 +11,65 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "Format pendaftaran tidak valid." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Format pendaftaran tidak valid." }, { status: 400 });
   }
   if (!isRecord(body)) {
-    return NextResponse.json(
-      { error: "Format pendaftaran tidak valid." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Format pendaftaran tidak valid." }, { status: 400 });
   }
 
-  const nama = typeof body.nama === "string" ? body.nama.trim() : "";
-  const phoneInput =
-    typeof body.nomor_telepon === "string" ? body.nomor_telepon.trim() : "";
-  const nomorTelepon = normalizePhone(phoneInput);
-
-  if (!nama || nama.length > 100) {
+  const nameValue = body.nama ?? body.Nama_Member;
+  const phoneValue = body.nomor_telepon ?? body.No_HP;
+  const name = typeof nameValue === "string" ? nameValue.trim() : "";
+  const phoneInput = typeof phoneValue === "string"
+    ? phoneValue.trim()
+    : "";
+  const phone = phoneInput.replace(/\D/g, "");
+  if (!name || name.length > 100) {
     return NextResponse.json(
       { error: "Nama lengkap wajib diisi (maksimal 100 karakter)." },
       { status: 400 },
     );
   }
-  if (!/^\+?[\d\s().-]{8,24}$/.test(phoneInput) || !/^\d{8,15}$/.test(nomorTelepon)) {
+  if (!/^\+?[\d\s().-]{8,24}$/.test(phoneInput) || !/^\d{8,15}$/.test(phone)) {
     return NextResponse.json(
       { error: "Nomor HP harus berisi 8 sampai 15 digit yang valid." },
       { status: 400 },
     );
   }
 
-  const password = createInitialPassword();
-
   try {
-    const user = await getPrismaClient().users.create({
+    const prisma = getPrismaClient();
+    const existing = await prisma.member.findFirst({ where: { No_HP: phone } });
+    if (existing) {
+      return NextResponse.json({ error: "Nomor HP sudah terdaftar." }, { status: 409 });
+    }
+
+    const member = await prisma.member.create({
       data: {
-        nama,
-        username: nomorTelepon,
-        nomor_telepon: nomorTelepon,
-        role: "Member",
-        password_hash: await hashPassword(password),
-      },
-      select: {
-        id_user: true,
-        nama: true,
-        username: true,
-        nomor_telepon: true,
-        role: true,
+        ID_Member: createRecordId("MBR-", 20),
+        Nama_Member: name,
+        No_HP: phone,
       },
     });
-
+    const user = {
+      ID_Member: member.ID_Member,
+      Nama_Member: member.Nama_Member,
+      No_HP: member.No_HP,
+      id_user: member.ID_Member,
+      nama: member.Nama_Member,
+      username: member.ID_Member,
+      nomor_telepon: member.No_HP,
+      role: "Member",
+    };
     return NextResponse.json(
       {
-        message:
-          "Pendaftaran berhasil. Simpan kredensial ini karena password hanya ditampilkan sekali.",
+        message: "Pendaftaran berhasil.",
         user,
-        credentials: { username: user.username, password },
+        credentials: { username: member.ID_Member, password: member.No_HP },
       },
       { status: 201 },
     );
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "P2002") {
-      return NextResponse.json(
-        { error: "Nomor HP sudah terdaftar." },
-        { status: 409 },
-      );
-    }
     console.error("Pendaftaran member gagal:", error);
     return NextResponse.json(
       { error: "Pendaftaran gagal disimpan. Periksa konfigurasi database." },

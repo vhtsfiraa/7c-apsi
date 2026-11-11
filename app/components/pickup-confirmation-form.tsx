@@ -6,7 +6,7 @@ import { useState, type FormEvent } from "react";
 export function PickupConfirmationForm({
   transactionId,
 }: {
-  transactionId: number;
+  transactionId: string;
 }) {
   const router = useRouter();
   const [verified, setVerified] = useState(false);
@@ -18,11 +18,14 @@ export function PickupConfirmationForm({
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch(`/api/transaksi/${transactionId}/pickup/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identityVerified: verified }),
-      });
+      const response = await fetch(
+        `/api/transaksi/${encodeURIComponent(transactionId)}/pickup/confirm`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identityVerified: verified }),
+        },
+      );
       const result = (await response.json()) as { message?: string; error?: string };
       setMessage(result.message ?? result.error ?? "Serah terima gagal diproses.");
       if (response.ok) router.refresh();

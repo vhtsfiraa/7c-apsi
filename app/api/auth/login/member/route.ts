@@ -1,5 +1,5 @@
-import { handleLogin } from "@/app/lib/login";
+import { handleRoleLogin } from "@/app/api/_lib/login";
 
 export function POST(request: Request) {
-  return handleLogin(request, "Member");
+  return handleRoleLogin(request, "Member");
 }

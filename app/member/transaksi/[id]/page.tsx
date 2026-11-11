@@ -8,62 +8,78 @@ export const instant = false;
 
 type PageProps = { params: Promise<{ id: string }> };
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function MemberTransactionDetailPage({ params }: PageProps) {
   const member = await requireRole("Member");
-  const { id: rawId } = await params;
-  const id = Number(rawId);
-  if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id) || id > 2_147_483_647) {
-    notFound();
-  }
-  const transaction = await getPrismaClient().transaksi.findFirst({
-    where: { id_transaksi: id, id_user: member.userId },
-    include: {
-      status_laundry: { select: { nama_status: true } },
-      riwayat_status: {
-        orderBy: { berubah_pada: "desc" },
-        select: {
-          status_sebelumnya: true,
-          status_baru: true,
-          berubah_pada: true,
+  const { id } = await params;
+  if (!id || id.length > 30) notFound();
+
+  const prisma = getPrismaClient();
+  const [profile, transaction] = await Promise.all([
+    prisma.member.findUnique({
+      where: { ID_Member: member.userId },
+      select: { Nama_Member: true, ID_Member: true },
+    }),
+    prisma.transaksi.findFirst({
+      where: {
+        AND: [
+          { Kode_Transaksi: id, ID_Member: member.userId },
+          laundryTransactionFilter,
+        ],
+      },
+      include: {
+        statusProses: {
+          orderBy: { Waktu_Status: "desc" },
+          include: { status: true },
         },
       },
-      pengambilan: true,
-    },
-  });
-  if (!transaction) notFound();
+    }),
+  ]);
+  if (!transaction || !profile) notFound();
+
+  const currentStatus = transaction.statusProses[0]?.status.Nama_Status ?? null;
 
   return (
     <DashboardShell
       heading="Detail Status Laundry"
-      identity={`${member.name} · ${member.username}`}
+      identity={`${profile.Nama_Member} · ${profile.ID_Member}`}
       activeHref="/member/riwayat"
       role="Member"
     >
       <section className="rounded-xl border border-[#e2e8f0] bg-white p-5 sm:p-6">
-        <h2 className="text-base font-semibold">
-          TRX-{String(transaction.id_transaksi).padStart(6, "0")}
-        </h2>
+        <h2 className="text-base font-semibold">{transaction.Kode_Transaksi}</h2>
         <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
           <div>
-            <dt className="text-xs text-[#64748b]">Layanan / Barang</dt>
-            <dd className="mt-1 font-medium">
-              {transaction.jenis_layanan ?? transaction.nama_barang}
-            </dd>
+            <dt className="text-xs text-[#64748b]">Catatan Pakaian</dt>
+            <dd className="mt-1 font-medium">{transaction.Catatan_Pakaian ?? "—"}</dd>
           </div>
           <div>
             <dt className="text-xs text-[#64748b]">Status saat ini</dt>
-            <dd className="mt-1 font-medium">
-              {transaction.status_laundry?.nama_status ?? "Belum ditetapkan"}
-            </dd>
+            <dd className="mt-1 font-medium">{currentStatus ?? "Belum ditetapkan"}</dd>
           </div>
           <div>
             <dt className="text-xs text-[#64748b]">Dibuat</dt>
-            <dd className="mt-1">{transaction.tanggal.toLocaleString("id-ID")}</dd>
+            <dd className="mt-1">
+              {transaction.Tgl_Jam_Transaksi.toLocaleString("id-ID")}
+            </dd>
           </div>
           <div>
-            <dt className="text-xs text-[#64748b]">Estimasi Selesai</dt>
+            <dt className="text-xs text-[#64748b]">Berat</dt>
             <dd className="mt-1">
-              {transaction.estimasi_selesai?.toLocaleString("id-ID") ?? "Belum tersedia"}
+              {transaction.Total_Berat_Kg
+                ? `${transaction.Total_Berat_Kg.toString()} kg`
+                : "Belum tersedia"}
             </dd>
           </div>
         </dl>
@@ -71,20 +87,16 @@ export default async function MemberTransactionDetailPage({ params }: PageProps)
 
       <section className="rounded-xl border border-[#e2e8f0] bg-white p-5 sm:p-6">
         <h2 className="mb-4 text-base font-semibold">Riwayat Perubahan Status</h2>
-        {transaction.riwayat_status.length > 0 ? (
+        {transaction.statusProses.length > 0 ? (
           <ol className="space-y-3">
-            {transaction.riwayat_status.map((history) => (
+            {transaction.statusProses.map((history) => (
               <li
                 className="flex flex-wrap justify-between gap-2 rounded-lg bg-[#f4f7fb] px-4 py-3 text-sm"
-                key={`${history.status_baru}-${history.berubah_pada.toISOString()}`}
+                key={`${history.ID_Status}-${history.Waktu_Status.toISOString()}`}
               >
-                <span>
-                  {history.status_sebelumnya
-                    ? `${history.status_sebelumnya} → ${history.status_baru}`
-                    : history.status_baru}
-                </span>
+                <span>{history.status.Nama_Status}</span>
                 <time className="text-xs text-[#64748b]">
-                  {history.berubah_pada.toLocaleString("id-ID")}
+                  {history.Waktu_Status.toLocaleString("id-ID")}
                 </time>
               </li>
             ))}
@@ -94,17 +106,18 @@ export default async function MemberTransactionDetailPage({ params }: PageProps)
         )}
       </section>
 
-      {transaction.status_laundry?.nama_status === "Selesai" && (
+      {(currentStatus === "Selesai" ||
+        currentStatus === "Menunggu Pengambilan" ||
+        currentStatus === "Sudah Diambil") && (
         <section className="rounded-xl border border-[#e2e8f0] bg-white p-5 sm:p-6">
           <h2 className="text-base font-semibold">Pengambilan Pakaian</h2>
-          {transaction.pengambilan?.diserahkan_pada ? (
+          {currentStatus === "Sudah Diambil" ? (
             <p className="mt-3 text-sm text-[#64748b]">
-              Sudah diserahterimakan pada{" "}
-              {transaction.pengambilan.diserahkan_pada.toLocaleString("id-ID")}.
+              Pesanan ini telah ditandai Sudah Diambil.
             </p>
-          ) : transaction.pengambilan ? (
+          ) : currentStatus === "Menunggu Pengambilan" ? (
             <p className="mt-3 text-sm text-[#64748b]">
-              Permintaan Anda telah tercatat. Serah terima final dilakukan Kasir.
+              Permintaan pengambilan tercatat. Serah terima final dilakukan Kasir.
             </p>
           ) : (
             <>
@@ -113,7 +126,7 @@ export default async function MemberTransactionDetailPage({ params }: PageProps)
               </p>
               <div className="mt-4">
                 <ApiActionButton
-                  endpoint={`/api/transaksi/${transaction.id_transaksi}/pickup`}
+                  endpoint={`/api/transaksi/${encodeURIComponent(transaction.Kode_Transaksi)}/pickup`}
                   label="Ajukan Pengambilan"
                 />
               </div>

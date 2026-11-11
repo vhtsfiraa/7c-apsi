@@ -8,26 +8,38 @@ export const instant = false;
 
 type PageProps = { params: Promise<{ id: string }> };
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function EditTransactionPage({ params }: PageProps) {
   const cashier = await requireRole("Kasir");
-  const { id: rawId } = await params;
-  const id = Number(rawId);
-  if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id) || id > 2_147_483_647) {
-    notFound();
-  }
-  const transaction = await getPrismaClient().transaksi.findUnique({
-    where: { id_transaksi: id },
+  const { id } = await params;
+  if (!id || id.length > 30) notFound();
+  const transaction = await getPrismaClient().transaksi.findFirst({
+    where: {
+      Kode_Transaksi: id,
+      ...laundryTransactionFilter,
+    },
     select: {
-      id_transaksi: true,
-      nama_barang: true,
-      jenis_layanan: true,
-      jumlah: true,
-      berat_kg: true,
-      harga_satuan: true,
-      estimasi_selesai: true,
+      Kode_Transaksi: true,
+      Catatan_Pakaian: true,
+      Total_Berat_Kg: true,
+      Harga_Per_Kg: true,
     },
   });
   if (!transaction) notFound();
+  const field = (name: string) =>
+    transaction.Catatan_Pakaian?.match(new RegExp(`^${name}:\\s*(.*)$`, "m"))?.[1] ?? "";
+  const quantity = Number(field("Jumlah"));
 
   return (
     <DashboardShell
@@ -38,10 +50,13 @@ export default async function EditTransactionPage({ params }: PageProps) {
     >
       <TransactionEditForm
         transaction={{
-          ...transaction,
-          berat_kg: transaction.berat_kg?.toString() ?? null,
-          harga_satuan: transaction.harga_satuan.toString(),
-          estimasi_selesai: transaction.estimasi_selesai?.toISOString() ?? null,
+          id_transaksi: transaction.Kode_Transaksi,
+          nama_barang: field("Pakaian") || transaction.Catatan_Pakaian || "",
+          jenis_layanan: field("Layanan") || null,
+          jumlah: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 1,
+          berat_kg: transaction.Total_Berat_Kg?.toString() ?? null,
+          harga_satuan: String(transaction.Harga_Per_Kg ?? ""),
+          catatan_pakaian: field("Catatan"),
         }}
       />
     </DashboardShell>

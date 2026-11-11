@@ -1,27 +1,21 @@
-import { getSession, normalizeRole } from "@/app/lib/auth";
+import { getSession } from "@/app/lib/auth";
 import { getPrismaClient } from "@/app/lib/prisma";
-import { ensureLaundryStatuses } from "@/app/lib/laundry";
 import {
+  COIN_ADJUSTMENT_PREFIX,
+  COINS_PER_FIVE_KG,
+  createRecordId,
   DISCOUNT_PERCENT,
   DISCOUNT_REDEMPTION_COINS,
-} from "@/app/lib/laundry";
+  ensureLaundryStatuses,
+  getMemberCoinBalance,
+  makeTransactionNote,
+  serializeTransaction,
+} from "@/app/api/_lib/erd";
 
 type JsonRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isPrismaError(error: unknown): error is Error & { code: string } {
-  return error instanceof Error && "code" in error && typeof error.code === "string";
-}
-
-function moneyCents(value: unknown) {
-  const text = typeof value === "number" || typeof value === "string" ? String(value) : "";
-  if (!/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/.test(text)) return null;
-  const amount = Number(text);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  return Math.round(amount * 100);
 }
 
 function parseEstimate(value: unknown) {
@@ -37,16 +31,17 @@ export async function GET() {
     return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
   }
   try {
-    const transactions = await getPrismaClient().transaksi.findMany({
-      where: session.role === "Member" ? { id_user: session.userId } : undefined,
-      orderBy: { tanggal: "desc" },
+    const records = await getPrismaClient().transaksi.findMany({
+      where: session.role === "Member" ? { ID_Member: session.userId } : undefined,
+      orderBy: { Tgl_Jam_Transaksi: "desc" },
       include: {
-        users: { select: { id_user: true, nama: true, username: true } },
-        status_laundry: { select: { nama_status: true } },
-        riwayat_status: { orderBy: { berubah_pada: "desc" } },
-        pengambilan: true,
+        member: true,
+        statusProses: { include: { status: true } },
       },
     });
+    const transactions = records
+      .filter((record) => !record.Catatan_Pakaian?.startsWith(COIN_ADJUSTMENT_PREFIX))
+      .map(serializeTransaction);
     return Response.json({ transactions });
   } catch (error) {
     console.error("Gagal membaca transaksi:", error);
@@ -73,137 +68,143 @@ export async function POST(request: Request) {
     return Response.json({ error: "Data transaksi harus berupa objek JSON." }, { status: 400 });
   }
 
-  const memberId = body.id_user;
+  const memberValue = body.id_user ?? body.ID_Member;
+  const memberId = typeof memberValue === "string" ? memberValue.trim() : "";
   const itemName = typeof body.nama_barang === "string" ? body.nama_barang.trim() : "";
   const serviceName = typeof body.jenis_layanan === "string" ? body.jenis_layanan.trim() : "";
   const quantity = body.jumlah === undefined ? 1 : body.jumlah;
-  const weightText = body.berat_kg === undefined || body.berat_kg === null || body.berat_kg === ""
+  const weightValue = body.berat_kg ?? body.Total_Berat_Kg;
+  const weightText = weightValue === undefined || weightValue === null || weightValue === ""
     ? ""
-    : String(body.berat_kg);
+    : String(weightValue);
   const weight = weightText ? Number(weightText) : null;
-  const unitPriceCents = moneyCents(body.harga_satuan);
+  const priceValue = body.harga_satuan ?? body.harga_per_kg ?? body.Harga_Per_Kg;
+  const priceText = typeof priceValue === "number" || typeof priceValue === "string"
+    ? String(priceValue)
+    : "";
+  const price = /^\d{1,10}$/.test(priceText) ? Number(priceText) : 0;
   const useDiscount = body.gunakan_diskon === true;
   const estimate = parseEstimate(body.estimasi_selesai);
+  const noteValue = body.catatan_pakaian ?? body.Catatan_Pakaian;
+  const extraNote = typeof noteValue === "string"
+    ? noteValue.trim()
+    : typeof body.catatan === "string"
+      ? body.catatan.trim()
+      : "";
 
-  if (!Number.isSafeInteger(memberId) || Number(memberId) < 1 || Number(memberId) > 2_147_483_647) {
+  if (!memberId || memberId.length > 20) {
     return Response.json({ error: "Pilih Member yang valid." }, { status: 400 });
   }
-  if (!itemName || itemName.length > 100) {
-    return Response.json({ error: "Nama pakaian/paket wajib diisi (maksimal 100 karakter)." }, { status: 400 });
+  if (itemName && itemName.length > 100) {
+    return Response.json(
+      { error: "Nama pakaian maksimal 100 karakter." },
+      { status: 400 },
+    );
   }
-  if (serviceName.length > 100) {
-    return Response.json({ error: "Jenis layanan maksimal 100 karakter." }, { status: 400 });
+  if (serviceName.length > 100 || extraNote.length > 10000) {
+    return Response.json({ error: "Jenis layanan atau catatan terlalu panjang." }, { status: 400 });
   }
   if (!Number.isSafeInteger(quantity) || Number(quantity) < 1 || Number(quantity) > 2_147_483_647) {
     return Response.json({ error: "Jumlah harus berupa bilangan bulat positif." }, { status: 400 });
   }
-  if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 9999)) {
-    return Response.json({ error: "Berat harus lebih dari 0 dan maksimal 9999 kg." }, { status: 400 });
+  if (
+    weight !== null &&
+    (!Number.isFinite(weight) || weight <= 0 || weight > 999.99 || !/^\d+(?:\.\d{1,2})?$/.test(weightText))
+  ) {
+    return Response.json({ error: "Berat harus lebih dari 0 dan maksimal 999.99 kg." }, { status: 400 });
   }
-  if (unitPriceCents === null) {
-    return Response.json({ error: "Harga satuan harus lebih dari 0 dan maksimal 2 angka desimal." }, { status: 400 });
+  if (!Number.isSafeInteger(price) || price <= 0 || price > 2_147_483_647) {
+    return Response.json({ error: "Harga per kg harus berupa bilangan bulat positif." }, { status: 400 });
   }
   if (estimate === undefined) {
     return Response.json({ error: "Estimasi selesai tidak valid." }, { status: 400 });
   }
 
-  const billedQuantity = weight ?? Number(quantity);
-  const grossTotalCents = Math.round(unitPriceCents * billedQuantity);
-  const totalCents = useDiscount
-    ? Math.round((grossTotalCents * (100 - DISCOUNT_PERCENT)) / 100)
-    : grossTotalCents;
-  if (!Number.isSafeInteger(totalCents) || totalCents > 999_999_999_999) {
-    return Response.json({ error: "Total transaksi terlalu besar." }, { status: 400 });
-  }
-
+  const prisma = getPrismaClient();
   try {
-    const prisma = getPrismaClient();
     const [member, statuses] = await Promise.all([
-      prisma.users.findUnique({
-        where: { id_user: Number(memberId) },
-        select: { role: true, koin_saldo: true },
-      }),
+      prisma.member.findUnique({ where: { ID_Member: memberId } }),
       ensureLaundryStatuses(prisma),
     ]);
-    if (!member || normalizeRole(member.role) !== "Member") {
-      return Response.json({ error: "Member tidak ditemukan." }, { status: 400 });
-    }
-    if (useDiscount && member.koin_saldo < DISCOUNT_REDEMPTION_COINS) {
+    if (!member) return Response.json({ error: "Member tidak ditemukan." }, { status: 400 });
+    if (useDiscount && await getMemberCoinBalance(prisma, memberId) < DISCOUNT_REDEMPTION_COINS) {
       return Response.json(
         { error: `Diskon ${DISCOUNT_PERCENT}% memerlukan saldo minimal ${DISCOUNT_REDEMPTION_COINS} koin.` },
         { status: 409 },
       );
     }
 
-    const initialStatus = statuses.find((status) => status.nama_status === "Menunggu");
-    if (!initialStatus) {
-      throw new Error("Status awal laundry belum tersedia.");
+    const initialStatus = statuses.find(({ Nama_Status }) => Nama_Status === "Menunggu");
+    if (!initialStatus) throw new Error("Status awal laundry belum tersedia.");
+    const earnedCoins = weight === null
+      ? 0
+      : Math.floor(weight / 5) * COINS_PER_FIVE_KG;
+    const note = itemName
+      ? makeTransactionNote({
+          name: itemName,
+          service: serviceName,
+          quantity: Number(quantity),
+          note: extraNote,
+        })
+      : extraNote || null;
+    const amount = price * (weight ?? Number(quantity));
+    const totalCents = Math.round(
+      amount * (useDiscount ? (100 - DISCOUNT_PERCENT) / 100 : 1) * 100,
+    );
+    if (!Number.isSafeInteger(totalCents)) {
+      return Response.json({ error: "Total transaksi terlalu besar." }, { status: 400 });
     }
-    const transaction = await prisma.$transaction(async (tx) => {
-      if (useDiscount) {
-        const debit = await tx.users.updateMany({
-          where: {
-            id_user: Number(memberId),
-            koin_saldo: { gte: DISCOUNT_REDEMPTION_COINS },
-          },
-          data: { koin_saldo: { decrement: DISCOUNT_REDEMPTION_COINS } },
-        });
-        if (debit.count !== 1) return null;
-      }
+    const total = totalCents / 100;
 
-      const created = await tx.transaksi.create({
+    const created = await prisma.$transaction(async (tx) => {
+      const currentBalance = await getMemberCoinBalance(tx, memberId);
+      if (useDiscount && currentBalance < DISCOUNT_REDEMPTION_COINS) return null;
+      const record = await tx.transaksi.create({
         data: {
-          id_user: Number(memberId),
-          created_by: session.userId,
-          nama_barang: itemName,
-          jenis_layanan: serviceName || null,
-          jumlah: weight === null ? Number(quantity) : 1,
-          berat_kg: weight,
-          harga_satuan: (unitPriceCents / 100).toFixed(2),
-          total_bayar: (totalCents / 100).toFixed(2),
-          diskon_persen: useDiscount ? DISCOUNT_PERCENT : 0,
-          koin_dipakai: useDiscount ? DISCOUNT_REDEMPTION_COINS : 0,
-          estimasi_selesai: estimate,
-          status_id: initialStatus.id_status,
+          Kode_Transaksi: createRecordId("TRX-", 30),
+          ID_Member: memberId,
+          ID_Kasir: session.userId,
+          Total_Berat_Kg: weight,
+          Catatan_Pakaian: note,
+          Harga_Per_Kg: price,
+          Nilai_Per_Koin: 5000,
+          Saldo_Koin_Awal: currentBalance,
+          Koin_Didapat: earnedCoins,
+          Koin_Ditukar: useDiscount ? DISCOUNT_REDEMPTION_COINS : 0,
+          Waktu_Notifikasi_Selesai: null,
         },
       });
-      await tx.riwayat_status.create({
+      await tx.status_proses.create({
         data: {
-          id_transaksi: created.id_transaksi,
-          status_id: initialStatus.id_status,
-          status_baru: initialStatus.nama_status,
-          changed_by: session.userId,
+          Kode_Transaksi: record.Kode_Transaksi,
+          ID_Status: initialStatus.ID_Status,
         },
       });
-      if (useDiscount) {
-        await tx.riwayat_koin.create({
-          data: {
-            id_user: Number(memberId),
-            id_kasir: session.userId,
-            id_transaksi: created.id_transaksi,
-            jumlah: -DISCOUNT_REDEMPTION_COINS,
-            keterangan: `Penukaran ${DISCOUNT_REDEMPTION_COINS} koin untuk diskon transaksi ${DISCOUNT_PERCENT}%.`,
-          },
-        });
-      }
-      return created;
+      return record;
     });
 
-    if (!transaction) {
-      return Response.json(
-        { error: "Saldo koin tidak mencukupi untuk diskon." },
-        { status: 409 },
-      );
+    if (!created) {
+      return Response.json({ error: "Saldo koin tidak mencukupi untuk diskon." }, { status: 409 });
     }
+    const record = await prisma.transaksi.findUniqueOrThrow({
+      where: { Kode_Transaksi: created.Kode_Transaksi },
+      include: { member: true, statusProses: { include: { status: true } } },
+    });
     return Response.json(
-      { message: "Transaksi berhasil disimpan.", transaction },
+      {
+        message: "Transaksi berhasil disimpan.",
+        transaction: {
+          ...serializeTransaction(record),
+          total_bayar: total,
+        },
+      },
       { status: 201 },
     );
   } catch (error) {
-    if (isPrismaError(error) && (error.code === "P2025" || error.code === "P2003")) {
-      return Response.json({ error: "Member tidak ditemukan." }, { status: 400 });
-    }
     console.error("Gagal menyimpan transaksi laundry:", error);
-    return Response.json({ error: "Transaksi gagal disimpan. Periksa konfigurasi server." }, { status: 500 });
+    return Response.json(
+      { error: "Transaksi gagal disimpan. Periksa konfigurasi server." },
+      { status: 500 },
+    );
   }
 }

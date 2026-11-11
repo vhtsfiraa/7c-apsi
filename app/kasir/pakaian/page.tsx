@@ -5,16 +5,29 @@ import { getPrismaClient } from "@/app/lib/prisma";
 
 export const instant = false;
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function KasirLaundryItemsPage() {
   const cashier = await requireRole("Kasir");
   const items = await getPrismaClient().transaksi.findMany({
-    orderBy: { tanggal: "desc" },
+    where: laundryTransactionFilter,
+    orderBy: { Tgl_Jam_Transaksi: "desc" },
     select: {
-      id_transaksi: true,
-      nama_barang: true,
-      jumlah: true,
-      tanggal: true,
-      users: { select: { nama: true } },
+      Kode_Transaksi: true,
+      Catatan_Pakaian: true,
+      Total_Berat_Kg: true,
+      Tgl_Jam_Transaksi: true,
+      member: { select: { Nama_Member: true } },
     },
   });
 
@@ -37,31 +50,30 @@ export default async function KasirLaundryItemsPage() {
               <tr>
                 <th className="px-3 py-3 font-medium">Tanggal</th>
                 <th className="px-3 py-3 font-medium">Member</th>
-                <th className="px-3 py-3 font-medium">Pakaian / Paket</th>
-                <th className="px-3 py-3 font-medium">Jumlah</th>
+                <th className="px-3 py-3 font-medium">Catatan Pakaian</th>
+                <th className="px-3 py-3 font-medium">Berat</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
-                <tr className="border-t border-[#e2e8f0]" key={item.id_transaksi}>
+                <tr className="border-t border-[#e2e8f0]" key={item.Kode_Transaksi}>
                   <td className="px-3 py-3">
-                    {item.tanggal.toLocaleDateString("id-ID", {
+                    {item.Tgl_Jam_Transaksi.toLocaleDateString("id-ID", {
                       day: "2-digit",
                       month: "short",
                       year: "numeric",
                     })}
                   </td>
-                  <td className="px-3 py-3">{item.users.nama}</td>
-                  <td className="px-3 py-3">{item.nama_barang}</td>
-                  <td className="px-3 py-3">{item.jumlah}</td>
+                  <td className="px-3 py-3">{item.member.Nama_Member}</td>
+                  <td className="px-3 py-3">{item.Catatan_Pakaian ?? "—"}</td>
+                  <td className="px-3 py-3">
+                    {item.Total_Berat_Kg ? `${item.Total_Berat_Kg.toString()} kg` : "—"}
+                  </td>
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td
-                    className="px-3 py-6 text-center text-[#64748b]"
-                    colSpan={4}
-                  >
+                  <td className="px-3 py-6 text-center text-[#64748b]" colSpan={4}>
                     Belum ada item laundry tercatat.
                   </td>
                 </tr>

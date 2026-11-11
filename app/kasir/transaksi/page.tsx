@@ -14,22 +14,43 @@ const currency = new Intl.NumberFormat("id-ID", {
   maximumFractionDigits: 0,
 });
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function KasirTransactionPage() {
   const cashier = await requireRole("Kasir");
   const prisma = getPrismaClient();
   const [members, transactions] = await Promise.all([
-    prisma.users.findMany({
-      where: { role: { equals: "Member", mode: "insensitive" } },
-      orderBy: { nama: "asc" },
-      select: { id_user: true, nama: true, nomor_telepon: true },
+    prisma.member.findMany({
+      orderBy: { Nama_Member: "asc" },
+      select: {
+        ID_Member: true,
+        Nama_Member: true,
+        No_HP: true,
+      },
     }),
     prisma.transaksi.findMany({
-      orderBy: { tanggal: "desc" },
+      where: laundryTransactionFilter,
+      orderBy: { Tgl_Jam_Transaksi: "desc" },
       take: 30,
       include: {
-        users: { select: { nama: true, id_user: true } },
-        status_laundry: { select: { nama_status: true } },
-        pengambilan: true,
+        member: { select: { ID_Member: true, Nama_Member: true } },
+        pegawaiKasir: { select: { Nama_Pegawai: true } },
+        pegawaiSupervisor: { select: { Nama_Pegawai: true } },
+        statusProses: {
+          orderBy: { Waktu_Status: "desc" },
+          take: 1,
+          include: { status: true },
+        },
       },
     }),
   ]);
@@ -64,7 +85,7 @@ export default async function KasirTransactionPage() {
               <tr>
                 <th className="px-3 py-3 font-medium">Kode</th>
                 <th className="px-3 py-3 font-medium">Member</th>
-                <th className="px-3 py-3 font-medium">Layanan / Barang</th>
+                <th className="px-3 py-3 font-medium">Catatan Pakaian</th>
                 <th className="px-3 py-3 font-medium">Tanggal</th>
                 <th className="px-3 py-3 font-medium">Status</th>
                 <th className="px-3 py-3 font-medium">Total</th>
@@ -74,65 +95,69 @@ export default async function KasirTransactionPage() {
             <tbody>
               {transactions.map((transaction) => {
                 const total =
-                  transaction.total_bayar ??
-                  Number(transaction.harga_satuan) * transaction.jumlah;
-                const status = transaction.status_laundry?.nama_status ?? null;
+                  Number(transaction.Total_Berat_Kg ?? 0) *
+                  (transaction.Harga_Per_Kg ?? 0) *
+                  (transaction.Koin_Ditukar ? 0.75 : 1);
+                const status = transaction.statusProses[0]?.status.Nama_Status ?? null;
                 return (
                   <tr
                     className="border-t border-[#e2e8f0] align-top"
-                    key={transaction.id_transaksi}
+                    key={transaction.Kode_Transaksi}
                   >
+                    <td className="px-3 py-3">{transaction.Kode_Transaksi}</td>
                     <td className="px-3 py-3">
-                      TRX-{String(transaction.id_transaksi).padStart(6, "0")}
-                    </td>
-                    <td className="px-3 py-3">
-                      {transaction.users.nama}
+                      {transaction.member.Nama_Member}
                       <span className="block text-[#64748b]">
-                        MBR-{String(transaction.users.id_user).padStart(3, "0")}
+                        {transaction.member.ID_Member}
                       </span>
                     </td>
                     <td className="px-3 py-3">
-                      {transaction.jenis_layanan ?? transaction.nama_barang}
+                      {transaction.Catatan_Pakaian ?? "—"}
                       <span className="block text-[#64748b]">
-                        {transaction.berat_kg
-                          ? `${transaction.berat_kg.toString()} kg`
-                          : `${transaction.jumlah} pcs`}
+                        {transaction.Total_Berat_Kg
+                          ? `${transaction.Total_Berat_Kg.toString()} kg`
+                          : ""}
                       </span>
                     </td>
                     <td className="px-3 py-3">
-                      {transaction.tanggal.toLocaleDateString("id-ID")}
-                      {transaction.estimasi_selesai && (
+                      {transaction.Tgl_Jam_Transaksi.toLocaleDateString("id-ID")}
+                    </td>
+                    <td className="px-3 py-3">
+                      {status ?? "Belum ditetapkan"}
+                      <span className="block text-[#64748b]">
+                        Kasir: {transaction.pegawaiKasir.Nama_Pegawai}
+                      </span>
+                      {transaction.pegawaiSupervisor && (
                         <span className="block text-[#64748b]">
-                          Est. {transaction.estimasi_selesai.toLocaleDateString("id-ID")}
+                          Supervisor: {transaction.pegawaiSupervisor.Nama_Pegawai}
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-3">{status ?? "Belum ditetapkan"}</td>
-                    <td className="px-3 py-3">{currency.format(Number(total))}</td>
+                    <td className="px-3 py-3">{currency.format(total)}</td>
                     <td className="px-3 py-3">
                       <div className="flex flex-col items-start gap-2">
                         <Link
                           className="font-semibold text-[#2563eb] hover:underline"
-                          href={`/kasir/transaksi/${transaction.id_transaksi}/edit`}
+                          href={`/kasir/transaksi/${encodeURIComponent(transaction.Kode_Transaksi)}/edit`}
                         >
                           Ubah
                         </Link>
                         <Link
                           className="font-semibold text-[#2563eb] hover:underline"
-                          href={`/kasir/nota/${transaction.id_transaksi}`}
+                          href={`/kasir/nota/${encodeURIComponent(transaction.Kode_Transaksi)}`}
                         >
                           Cetak Struk
                         </Link>
                         <StatusUpdateForm
                           currentStatus={status}
-                          transactionId={transaction.id_transaksi}
+                          transactionId={transaction.Kode_Transaksi}
                         />
-                        {status === "Selesai" && transaction.pengambilan && (
+                        {status === "Menunggu Pengambilan" && (
                           <PickupConfirmationForm
-                            transactionId={transaction.id_transaksi}
+                            transactionId={transaction.Kode_Transaksi}
                           />
                         )}
-                        {status === "Selesai" && !transaction.pengambilan && (
+                        {status === "Selesai" && (
                           <span className="text-[#64748b]">
                             Menunggu permintaan pengambilan Member
                           </span>
@@ -144,10 +169,7 @@ export default async function KasirTransactionPage() {
               })}
               {transactions.length === 0 && (
                 <tr>
-                  <td
-                    className="px-3 py-6 text-center text-[#64748b]"
-                    colSpan={7}
-                  >
+                  <td className="px-3 py-6 text-center text-[#64748b]" colSpan={7}>
                     Belum ada transaksi laundry.
                   </td>
                 </tr>

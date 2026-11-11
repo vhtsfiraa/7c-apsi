@@ -4,13 +4,16 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 type StatusUpdateFormProps = {
-  transactionId: number;
+  transactionId: string;
   currentStatus: string | null;
 };
 
 const nextStatus: Record<string, string> = {
   Menunggu: "Diproses",
-  Diproses: "Selesai",
+  Diproses: "Dicuci",
+  Dicuci: "Dikeringkan",
+  Dikeringkan: "Disetrika",
+  Disetrika: "Selesai",
 };
 
 export function StatusUpdateForm({
@@ -42,7 +45,7 @@ export function StatusUpdateForm({
     }
   }
 
-  if (!status || currentStatus === "Sudah Diambil") {
+  if (!status) {
     return <span className="text-xs text-[#64748b]">—</span>;
   }
 

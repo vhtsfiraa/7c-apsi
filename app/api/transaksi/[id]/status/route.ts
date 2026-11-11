@@ -1,23 +1,28 @@
 import { authorizeApiRole } from "@/app/lib/api-auth";
 import { getPrismaClient } from "@/app/lib/prisma";
-import { ensureLaundryStatuses } from "@/app/lib/laundry";
+import { ensureLaundryStatuses } from "@/app/api/_lib/erd";
 
 type RouteContext = { params: Promise<{ id: string }> };
+const ALLOWED_NEXT: Record<string, string[]> = {
+  Menunggu: ["Diproses"],
+  Diproses: ["Dicuci", "Selesai"],
+  Dicuci: ["Dikeringkan", "Selesai"],
+  Dikeringkan: ["Disetrika", "Selesai"],
+  Disetrika: ["Selesai"],
+};
 
-function parseId(value: string) {
-  const id = Number(value);
-  return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(id) && id <= 2_147_483_647
-    ? id
+function validTransactionCode(value: string) {
+  return value.length > 0 && value.length <= 30 && !/[\u0000-\u001f]/.test(value)
+    ? value
     : null;
 }
 
 export async function POST(request: Request, { params }: RouteContext) {
   const authorization = await authorizeApiRole("Kasir");
   if (authorization.response) return authorization.response;
-
   const { id: rawId } = await params;
-  const id = parseId(rawId);
-  if (id === null) return Response.json({ error: "ID transaksi tidak valid." }, { status: 400 });
+  const code = validTransactionCode(rawId);
+  if (!code) return Response.json({ error: "ID transaksi tidak valid." }, { status: 400 });
 
   let body: unknown;
   try {
@@ -33,63 +38,49 @@ export async function POST(request: Request, { params }: RouteContext) {
   ) {
     return Response.json({ error: "Pilih status laundry yang valid." }, { status: 400 });
   }
-
-  const targetStatus = body.nama_status;
-  if (!["Menunggu", "Diproses", "Selesai"].includes(targetStatus)) {
-    return Response.json({ error: "Status pengambilan hanya dapat diubah melalui serah terima Kasir." }, { status: 400 });
+  const targetName = body.nama_status;
+  if (!Object.hasOwn(ALLOWED_NEXT, targetName) && targetName !== "Menunggu") {
+    return Response.json(
+      { error: "Status pengambilan hanya dapat diubah melalui serah terima Kasir." },
+      { status: 400 },
+    );
   }
 
   try {
     const prisma = getPrismaClient();
-    const statuses = await ensureLaundryStatuses(prisma);
-    const target = statuses.find((status) => status.nama_status === targetStatus);
-    const transaction = await prisma.transaksi.findUnique({
-      where: { id_transaksi: id },
-      include: { status_laundry: true },
-    });
-    if (!transaction || !target) {
-      return Response.json({ error: "Transaksi atau status tidak ditemukan." }, { status: 404 });
-    }
-
-    const previousStatus = transaction.status_laundry?.nama_status ?? null;
-    const allowedNext: Record<string, string> = {
-      Menunggu: "Diproses",
-      Diproses: "Selesai",
-    };
-    if (previousStatus === targetStatus) {
+    const [transaction, statuses] = await Promise.all([
+      prisma.transaksi.findUnique({
+        where: { Kode_Transaksi: code },
+        include: { statusProses: { include: { status: true } } },
+      }),
+      ensureLaundryStatuses(prisma),
+    ]);
+    if (!transaction) return Response.json({ error: "Transaksi tidak ditemukan." }, { status: 404 });
+    const history = [...transaction.statusProses].sort(
+      (a, b) => b.Waktu_Status.getTime() - a.Waktu_Status.getTime(),
+    );
+    const previousName = history[0]?.status.Nama_Status ?? null;
+    if (previousName === targetName) {
       return Response.json({ message: "Status transaksi tidak berubah." });
     }
-    if (
-      (previousStatus === null && targetStatus !== "Menunggu") ||
-      (previousStatus !== null && allowedNext[previousStatus] !== targetStatus)
-    ) {
+    const canSetInitial = previousName === null && targetName === "Menunggu";
+    if (!canSetInitial && !ALLOWED_NEXT[previousName ?? ""]?.includes(targetName)) {
       return Response.json(
-        { error: "Perubahan status harus mengikuti urutan Menunggu → Diproses → Selesai." },
+        { error: "Perubahan status harus mengikuti urutan proses laundry." },
         { status: 409 },
       );
     }
+    const target = statuses.find(({ Nama_Status }) => Nama_Status === targetName);
+    if (!target) return Response.json({ error: "Status tidak ditemukan." }, { status: 404 });
 
     await prisma.$transaction(async (tx) => {
-      await tx.transaksi.update({
-        where: { id_transaksi: id },
-        data: { status_id: target.id_status },
+      await tx.status_proses.create({
+        data: { Kode_Transaksi: code, ID_Status: target.ID_Status },
       });
-      await tx.riwayat_status.create({
-        data: {
-          id_transaksi: id,
-          status_id: target.id_status,
-          status_sebelumnya: previousStatus,
-          status_baru: target.nama_status,
-          changed_by: authorization.session.userId,
-        },
-      });
-      if (target.nama_status === "Selesai") {
-        await tx.notifikasi.create({
-          data: {
-            id_user: transaction.id_user,
-            id_transaksi: id,
-            pesan: `Laundry ${transaction.nama_barang} telah selesai dan siap diambil.`,
-          },
+      if (targetName === "Selesai") {
+        await tx.transaksi.update({
+          where: { Kode_Transaksi: code },
+          data: { Waktu_Notifikasi_Selesai: new Date() },
         });
       }
     });

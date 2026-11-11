@@ -12,8 +12,8 @@ const cashierFeatures = [
     label: "Buka",
   },
   {
-    title: "Kelola Koin Member",
-    description: "Tambahkan koin dari berat pakaian atau proses penukaran.",
+    title: "Ringkasan Koin Member",
+    description: "Lihat saldo dan aktivitas koin yang tercatat pada transaksi.",
     href: "/kasir/koin",
     label: "Buka",
   },

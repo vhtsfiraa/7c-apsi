@@ -1,22 +1,51 @@
 import { authorizeApiRole } from "@/app/lib/api-auth";
+import { getSession } from "@/app/lib/auth";
 import { getPrismaClient } from "@/app/lib/prisma";
+import {
+  makeTransactionNote,
+  parseTransactionNote,
+  serializeTransaction,
+} from "@/app/api/_lib/erd";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-function parseId(value: string) {
-  const id = Number(value);
-  return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(id) && id <= 2_147_483_647
-    ? id
+function validTransactionCode(value: string) {
+  return value.length > 0 && value.length <= 30 && !/[\u0000-\u001f]/.test(value)
+    ? value
     : null;
+}
+
+export async function GET(_request: Request, { params }: RouteContext) {
+  const session = await getSession();
+  if (!session) {
+    return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
+  }
+  const { id: rawId } = await params;
+  const code = validTransactionCode(rawId);
+  if (!code) return Response.json({ error: "ID transaksi tidak valid." }, { status: 400 });
+
+  try {
+    const transaction = await getPrismaClient().transaksi.findUnique({
+      where: { Kode_Transaksi: code },
+      include: { member: true, statusProses: { include: { status: true } } },
+    });
+    if (!transaction) return Response.json({ error: "Transaksi tidak ditemukan." }, { status: 404 });
+    if (session.role === "Member" && transaction.ID_Member !== session.userId) {
+      return Response.json({ error: "Transaksi tidak ditemukan." }, { status: 404 });
+    }
+    return Response.json({ transaction: serializeTransaction(transaction) });
+  } catch (error) {
+    console.error("Gagal membaca transaksi:", error);
+    return Response.json({ error: "Data transaksi tidak dapat dimuat." }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: Request, { params }: RouteContext) {
   const authorization = await authorizeApiRole("Kasir");
   if (authorization.response) return authorization.response;
-
   const { id: rawId } = await params;
-  const id = parseId(rawId);
-  if (id === null) return Response.json({ error: "ID transaksi tidak valid." }, { status: 400 });
+  const code = validTransactionCode(rawId);
+  if (!code) return Response.json({ error: "ID transaksi tidak valid." }, { status: 400 });
 
   let body: unknown;
   try {
@@ -30,69 +59,74 @@ export async function PATCH(request: Request, { params }: RouteContext) {
   const data = body as Record<string, unknown>;
   const name = typeof data.nama_barang === "string" ? data.nama_barang.trim() : "";
   const service = typeof data.jenis_layanan === "string" ? data.jenis_layanan.trim() : "";
-  const quantity = data.jumlah;
-  const weightText = data.berat_kg === undefined || data.berat_kg === null || data.berat_kg === ""
+  const weightValue = data.berat_kg ?? data.Total_Berat_Kg;
+  const weightText = weightValue === undefined || weightValue === null || weightValue === ""
     ? ""
-    : String(data.berat_kg);
+    : String(weightValue);
   const weight = weightText ? Number(weightText) : null;
-  const priceText = typeof data.harga_satuan === "number" || typeof data.harga_satuan === "string"
-    ? String(data.harga_satuan)
+  const priceValue = data.harga_satuan ?? data.Harga_Per_Kg;
+  const priceText = typeof priceValue === "number" || typeof priceValue === "string"
+    ? String(priceValue)
     : "";
-  const priceCents = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/.test(priceText)
-    ? Math.round(Number(priceText) * 100)
-    : 0;
-  const estimateText = data.estimasi_selesai;
-  const estimate = estimateText === "" || estimateText === null
-    ? null
-    : typeof estimateText === "string"
-      ? new Date(estimateText)
-      : undefined;
+  const price = /^\d{1,10}$/.test(priceText) ? Number(priceText) : 0;
+  const noteValue = data.catatan_pakaian ?? data.Catatan_Pakaian;
+  const extraNote = typeof noteValue === "string"
+    ? noteValue.trim()
+    : "";
 
-  if (!name || name.length > 100 || service.length > 100) {
-    return Response.json({ error: "Nama pakaian wajib diisi; jenis layanan maksimal 100 karakter." }, { status: 400 });
+  if ((name && name.length > 100) || service.length > 100 || extraNote.length > 10000) {
+    return Response.json(
+      { error: "Nama pakaian atau jenis layanan tidak valid; catatan maksimal 10000 karakter." },
+      { status: 400 },
+    );
   }
-  if (!Number.isSafeInteger(quantity) || Number(quantity) < 1 || Number(quantity) > 2_147_483_647) {
-    return Response.json({ error: "Jumlah harus berupa bilangan bulat positif." }, { status: 400 });
-  }
-  if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 9999)) {
+  if (
+    weight !== null &&
+    (!Number.isFinite(weight) || weight <= 0 || weight > 999.99 || !/^\d+(?:\.\d{1,2})?$/.test(weightText))
+  ) {
     return Response.json({ error: "Berat tidak valid." }, { status: 400 });
   }
-  if (!priceCents || priceCents > 999_999_999_999 || estimate === undefined || (estimate && Number.isNaN(estimate.getTime()))) {
-    return Response.json({ error: "Harga atau estimasi selesai tidak valid." }, { status: 400 });
-  }
-
-  const grossCents = Math.round(priceCents * (weight ?? Number(quantity)));
-  if (!Number.isSafeInteger(grossCents) || grossCents > 999_999_999_999) {
-    return Response.json({ error: "Total transaksi terlalu besar." }, { status: 400 });
+  if (!Number.isSafeInteger(price) || price <= 0 || price > 2_147_483_647) {
+    return Response.json({ error: "Harga per kg tidak valid." }, { status: 400 });
   }
 
   try {
     const prisma = getPrismaClient();
     const transaction = await prisma.transaksi.findUnique({
-      where: { id_transaksi: id },
-      select: {
-        status_laundry: { select: { nama_status: true } },
-        diskon_persen: true,
-      },
+      where: { Kode_Transaksi: code },
+      include: { statusProses: { include: { status: true } } },
     });
     if (!transaction) return Response.json({ error: "Transaksi tidak ditemukan." }, { status: 404 });
-    if (transaction.status_laundry?.nama_status === "Sudah Diambil") {
-      return Response.json({ error: "Transaksi yang sudah diambil tidak dapat diubah." }, { status: 409 });
+    const currentStatus = [...transaction.statusProses]
+      .sort((a, b) => b.Waktu_Status.getTime() - a.Waktu_Status.getTime())[0]
+      ?.status.Nama_Status;
+    if (currentStatus === "Sudah Diambil" || currentStatus === "Menunggu Pengambilan") {
+      return Response.json({ error: "Transaksi yang menunggu atau sudah diambil tidak dapat diubah." }, { status: 409 });
     }
-    const totalCents = Math.round(
-      (grossCents * (100 - transaction.diskon_persen)) / 100,
-    );
 
+    const oldNote = parseTransactionNote(transaction.Catatan_Pakaian);
+    const quantityValue = data.jumlah ?? oldNote.jumlah;
+    if (
+      !Number.isSafeInteger(quantityValue) ||
+      Number(quantityValue) < 1 ||
+      Number(quantityValue) > 2_147_483_647
+    ) {
+      return Response.json({ error: "Jumlah harus berupa bilangan bulat positif." }, { status: 400 });
+    }
+    const note = name
+      ? makeTransactionNote({
+          name,
+          service: service || oldNote.jenis_layanan,
+          quantity: Number(quantityValue),
+          note: extraNote || undefined,
+        })
+      : extraNote || null;
     await prisma.transaksi.update({
-      where: { id_transaksi: id },
+      where: { Kode_Transaksi: code },
       data: {
-        nama_barang: name,
-        jenis_layanan: service || null,
-        jumlah: weight === null ? Number(quantity) : 1,
-        berat_kg: weight,
-        harga_satuan: (priceCents / 100).toFixed(2),
-        total_bayar: (totalCents / 100).toFixed(2),
-        estimasi_selesai: estimate,
+        Catatan_Pakaian: note,
+        Total_Berat_Kg: weight,
+        Harga_Per_Kg: price,
       },
     });
     return Response.json({ message: "Informasi transaksi berhasil diperbarui." });

@@ -1,20 +1,42 @@
 import { DashboardShell } from "@/app/components/dashboard-shell";
 import { requireRole } from "@/app/lib/auth";
-import { ensureLaundryStatuses } from "@/app/lib/laundry";
 import { getPrismaClient } from "@/app/lib/prisma";
 
 export const instant = false;
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function LaundryStatusesPage() {
   const cashier = await requireRole("Kasir");
-  const statuses = await ensureLaundryStatuses(getPrismaClient());
-  const transactions = await getPrismaClient().transaksi.groupBy({
-    by: ["status_id"],
-    _count: { _all: true },
-  });
-  const counts = new Map(
-    transactions.map((item) => [item.status_id, item._count._all]),
-  );
+  const prisma = getPrismaClient();
+  const [statuses, transactions] = await Promise.all([
+    prisma.status.findMany({ orderBy: { Nama_Status: "asc" } }),
+    prisma.transaksi.findMany({
+      where: laundryTransactionFilter,
+      select: {
+        statusProses: {
+          orderBy: { Waktu_Status: "desc" },
+          take: 1,
+          select: { ID_Status: true },
+        },
+      },
+    }),
+  ]);
+  const counts = new Map<string, number>();
+  for (const transaction of transactions) {
+    const statusId = transaction.statusProses[0]?.ID_Status;
+    if (statusId) counts.set(statusId, (counts.get(statusId) ?? 0) + 1);
+  }
 
   return (
     <DashboardShell
@@ -29,17 +51,22 @@ export default async function LaundryStatusesPage() {
           {statuses.map((status) => (
             <li
               className="flex items-center justify-between gap-4 py-3 text-sm"
-              key={status.id_status}
+              key={status.ID_Status}
             >
-              <span className="font-medium">{status.nama_status}</span>
+              <span className="font-medium">{status.Nama_Status}</span>
               <span className="text-[#64748b]">
-                {counts.get(status.id_status) ?? 0} transaksi
+                {counts.get(status.ID_Status) ?? 0} transaksi
               </span>
             </li>
           ))}
+          {!statuses.length && (
+            <li className="py-4 text-sm text-[#64748b]">
+              Belum ada status yang terdaftar.
+            </li>
+          )}
         </ul>
         <p className="mt-4 text-xs text-[#64748b]">
-          Status diperbarui dari daftar transaksi agar riwayat perubahan tetap tercatat.
+          Status ditampilkan dari tabel STATUS; perubahan tiap transaksi tercatat di STATUS_PROSES.
         </p>
       </section>
     </DashboardShell>

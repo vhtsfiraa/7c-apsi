@@ -1,5 +1,5 @@
-import { handleLogin } from "@/app/lib/login";
+import { handleRoleLogin } from "@/app/api/_lib/login";
 
-export async function POST(request: Request) {
-  return handleLogin(request);
+export function POST(request: Request) {
+  return handleRoleLogin(request, "Kasir");
 }

@@ -1,22 +1,33 @@
 import { getSession } from "@/app/lib/auth";
 import { getPrismaClient } from "@/app/lib/prisma";
+import { serializeTransaction } from "@/app/api/_lib/erd";
 
 export async function GET() {
   const session = await getSession();
-  if (!session) return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
-
+  if (!session) {
+    return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
+  }
   try {
-    const notifications = await getPrismaClient().notifikasi.findMany({
-      where: session.role === "Member" ? { id_user: session.userId } : undefined,
-      orderBy: { dibuat_pada: "desc" },
-      include: {
-        transaksi: {
-          select: {
-            nama_barang: true,
-            status_laundry: { select: { nama_status: true } },
-          },
-        },
+    const records = await getPrismaClient().transaksi.findMany({
+      where: {
+        Waktu_Notifikasi_Selesai: { not: null },
+        ...(session.role === "Member" ? { ID_Member: session.userId } : {}),
       },
+      orderBy: { Waktu_Notifikasi_Selesai: "desc" },
+      include: { member: true, statusProses: { include: { status: true } } },
+    });
+    const notifications = records.map((record) => {
+      const transaction = serializeTransaction(record);
+      return {
+        id_notifikasi: record.Kode_Transaksi,
+        id_transaksi: record.Kode_Transaksi,
+        pesan: `Laundry ${transaction.nama_barang} telah selesai dan siap diambil.`,
+        dibuat_pada: record.Waktu_Notifikasi_Selesai,
+        transaksi: {
+          nama_barang: transaction.nama_barang,
+          status_laundry: transaction.status_laundry,
+        },
+      };
     });
     return Response.json({ notifications });
   } catch (error) {
@@ -25,44 +36,13 @@ export async function GET() {
   }
 }
 
-export async function PATCH(request: Request) {
+export async function PATCH() {
   const session = await getSession();
-  if (!session) return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
-  if (session.role !== "Member") {
-    return Response.json({ error: "Hanya Member yang dapat mengubah status baca notifikasinya." }, { status: 403 });
+  if (!session) {
+    return Response.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
   }
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Format request tidak valid." }, { status: 400 });
-  }
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("id_notifikasi" in body) ||
-    !Number.isSafeInteger(body.id_notifikasi) ||
-    Number(body.id_notifikasi) <= 0
-  ) {
-    return Response.json({ error: "ID notifikasi tidak valid." }, { status: 400 });
-  }
-
-  try {
-    const updated = await getPrismaClient().notifikasi.updateMany({
-      where: {
-        id_notifikasi: Number(body.id_notifikasi),
-        id_user: session.userId,
-        dibaca_pada: null,
-      },
-      data: { dibaca_pada: new Date() },
-    });
-    if (!updated.count) {
-      return Response.json({ error: "Notifikasi tidak ditemukan atau sudah dibaca." }, { status: 404 });
-    }
-    return Response.json({ message: "Notifikasi ditandai telah dibaca." });
-  } catch (error) {
-    console.error("Gagal menandai notifikasi:", error);
-    return Response.json({ error: "Notifikasi gagal diperbarui." }, { status: 500 });
-  }
+  return Response.json(
+    { error: "Status baca notifikasi tidak tersedia pada skema database saat ini." },
+    { status: 409 },
+  );
 }

@@ -4,13 +4,13 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 type Transaction = {
-  id_transaksi: number;
+  id_transaksi: string;
   nama_barang: string;
   jenis_layanan: string | null;
   jumlah: number;
   berat_kg: string | null;
   harga_satuan: string;
-  estimasi_selesai: string | null;
+  catatan_pakaian: string;
 };
 
 const input =
@@ -28,18 +28,21 @@ export function TransactionEditForm({ transaction }: { transaction: Transaction 
     const form = event.currentTarget;
     const values = new FormData(form);
     try {
-      const response = await fetch(`/api/transaksi/${transaction.id_transaksi}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nama_barang: values.get("nama_barang"),
-          jenis_layanan: values.get("jenis_layanan"),
-          jumlah: Number(values.get("jumlah")),
-          berat_kg: values.get("berat_kg") || null,
-          harga_satuan: values.get("harga_satuan"),
-          estimasi_selesai: values.get("estimasi_selesai") || null,
-        }),
-      });
+      const response = await fetch(
+        `/api/transaksi/${encodeURIComponent(transaction.id_transaksi)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nama_barang: values.get("nama_barang"),
+            jenis_layanan: values.get("jenis_layanan"),
+            jumlah: Number(values.get("jumlah")),
+            berat_kg: values.get("berat_kg") || null,
+            harga_satuan: values.get("harga_satuan"),
+            catatan_pakaian: values.get("catatan_pakaian"),
+          }),
+        },
+      );
       const result = (await response.json()) as { message?: string; error?: string };
       setMessage(result.message ?? result.error ?? "Perubahan gagal disimpan.");
       if (response.ok) router.push("/kasir/transaksi");
@@ -80,7 +83,7 @@ export function TransactionEditForm({ transaction }: { transaction: Transaction 
           <input
             className={input}
             defaultValue={transaction.berat_kg ?? ""}
-            max="9999"
+            max="999.99"
             min="0.01"
             name="berat_kg"
             step="0.01"
@@ -96,6 +99,7 @@ export function TransactionEditForm({ transaction }: { transaction: Transaction 
             min="1"
             name="jumlah"
             required
+            step="1"
             type="number"
           />
         </label>
@@ -104,31 +108,34 @@ export function TransactionEditForm({ transaction }: { transaction: Transaction 
           <input
             className={input}
             defaultValue={transaction.harga_satuan}
-            min="0.01"
+            min="1"
             name="harga_satuan"
             required
-            step="0.01"
+            step="1"
             type="number"
           />
         </label>
-        <label className="field">
-          <span>Estimasi selesai</span>
-          <input
-            className={input}
-            defaultValue={
-              transaction.estimasi_selesai
-                ? new Date(transaction.estimasi_selesai).toISOString().slice(0, 16)
-                : ""
-            }
-            name="estimasi_selesai"
-            type="datetime-local"
+        <label className="field sm:col-span-2">
+          <span>Catatan Pakaian</span>
+          <textarea
+            className={`${input} min-h-24 py-3`}
+            defaultValue={transaction.catatan_pakaian}
+            maxLength={1000}
+            name="catatan_pakaian"
           />
         </label>
       </div>
+      <p className="mt-2 text-xs text-[#64748b]">
+        Rincian layanan, barang, dan jumlah disimpan sebagai Catatan_Pakaian pada transaksi.
+      </p>
       <button className="login-action register-submit max-w-sm" disabled={busy} type="submit">
         {busy ? "Menyimpan..." : "Simpan Perubahan"}
       </button>
-      {message && <p aria-live="polite" className="mt-3 text-sm" role="status">{message}</p>}
+      {message && (
+        <p aria-live="polite" className="mt-3 text-sm" role="status">
+          {message}
+        </p>
+      )}
     </form>
   );
 }

@@ -7,110 +7,81 @@ datasource db {
   provider = "postgresql"
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model member {
+  ID_Member     String       @id @default(dbgenerated("'MBR-'::text || upper(substr(replace(gen_random_uuid()::text, '-'::text, ''::text), 1, 16))")) @db.VarChar(20)
+  Nama_Member   String       @db.VarChar(100)
+  No_HP         String?      @db.VarChar(20)
+  Gender_Member String?      @db.VarChar(20)
+  Tgl_Daftar    DateTime     @default(now()) @db.Date
+  transactions  transaksi[]
+
+  @@map("MEMBER")
+}
+
+model pegawai {
+  ID_Pegawai           String       @id @db.VarChar(20)
+  Nama_Pegawai         String       @db.VarChar(100)
+  Peran                String       @db.VarChar(50)
+  transaksiKasir       transaksi[]  @relation("TransaksiKasir")
+  transaksiSupervisor  transaksi[]  @relation("TransaksiSupervisor")
+  user                 users?
+
+  @@map("PEGAWAI")
+}
+
 model transaksi {
-  id_transaksi     Int              @id @default(autoincrement())
-  id_user          Int
-  created_by       Int?
-  nama_barang      String           @db.VarChar(100)
-  jenis_layanan    String?          @db.VarChar(100)
-  jumlah           Int
-  berat_kg         Decimal?         @db.Decimal(8, 2)
-  harga_satuan     Decimal          @db.Decimal(12, 2)
-  total_bayar      Decimal?         @db.Decimal(12, 2)
-  diskon_persen    Int              @default(0)
-  koin_dipakai     Int              @default(0)
-  estimasi_selesai DateTime?        @db.Timestamp(6)
-  tanggal          DateTime         @default(now()) @db.Timestamp(6)
-  status_id        Int?
-  koin_diberikan   Int              @default(0)
-  users            users            @relation("MemberTransactions", fields: [id_user], references: [id_user])
-  kasir            users?           @relation("TransaksiCreatedBy", fields: [created_by], references: [id_user])
-  status_laundry   status_laundry?  @relation(fields: [status_id], references: [id_status])
-  riwayat_status   riwayat_status[]
-  notifikasi       notifikasi[]
-  riwayat_koin     riwayat_koin[]
-  pengambilan      pengambilan?
+  Kode_Transaksi             String           @id @default(dbgenerated("'TRX-'::text || upper(substr(replace(gen_random_uuid()::text, '-'::text, ''::text), 1, 26))")) @db.VarChar(30)
+  Tgl_Jam_Transaksi          DateTime         @default(now()) @db.Timestamp(6)
+  ID_Member                  String           @db.VarChar(20)
+  ID_Kasir                   String           @db.VarChar(20)
+  ID_Supervisor              String?          @db.VarChar(20)
+  Total_Berat_Kg             Decimal?         @db.Decimal(5, 2)
+  Catatan_Pakaian            String?          @db.Text
+  Harga_Per_Kg               Int?
+  Nilai_Per_Koin             Int?
+  Saldo_Koin_Awal            Int?
+  Koin_Didapat               Int?
+  Koin_Ditukar               Int?
+  Waktu_Notifikasi_Selesai   DateTime?        @db.Timestamp(6)
+  member                     member           @relation(fields: [ID_Member], references: [ID_Member])
+  pegawaiKasir               pegawai          @relation("TransaksiKasir", fields: [ID_Kasir], references: [ID_Pegawai])
+  pegawaiSupervisor          pegawai?         @relation("TransaksiSupervisor", fields: [ID_Supervisor], references: [ID_Pegawai])
+  statusProses               status_proses[]
+
+  @@index([ID_Member])
+  @@index([ID_Kasir])
+  @@index([ID_Supervisor])
+  @@map("TRANSAKSI")
+}
+
+model status {
+  ID_Status     String          @id @db.VarChar(20)
+  Nama_Status   String          @db.VarChar(50)
+  statusProses  status_proses[]
+
+  @@map("STATUS")
+}
+
+model status_proses {
+  Kode_Transaksi    String     @db.VarChar(30)
+  ID_Status         String     @db.VarChar(20)
+  Waktu_Status      DateTime   @default(now()) @db.Timestamp(6)
+  transaksi    transaksi  @relation(fields: [Kode_Transaksi], references: [Kode_Transaksi])
+  status       status     @relation(fields: [ID_Status], references: [ID_Status])
+
+  @@id([Kode_Transaksi, ID_Status])
+  @@index([ID_Status])
+  @@map("STATUS_PROSES")
 }
 
 model users {
-  id_user                Int              @id @default(autoincrement())
-  nama                   String           @db.VarChar(100)
-  username               String           @unique @db.VarChar(50)
-  role                   String           @db.VarChar(20)
-  password_hash          String?          @db.VarChar(255)
-  nomor_telepon          String?          @unique @db.VarChar(30)
-  alamat                 String?          @db.VarChar(255)
-  koin_saldo             Int              @default(0)
-  transaksi              transaksi[]      @relation("MemberTransactions")
-  transaksi_dibuat       transaksi[]      @relation("TransaksiCreatedBy")
-  riwayat_status         riwayat_status[]
-  notifikasi             notifikasi[]
-  riwayat_koin_diperoleh riwayat_koin[]   @relation("CoinMember")
-  riwayat_koin_ditangani riwayat_koin[]   @relation("CoinHandledBy")
-  pengambilan_diminta    pengambilan[]    @relation("PickupRequestedBy")
-  pengambilan_ditangan   pengambilan[]    @relation("PickupProcessedBy")
-}
+  ID_User       String   @id @db.VarChar(20)
+  ID_Pegawai    String   @db.VarChar(20)
+  Username      String   @unique @db.VarChar(50)
+  Password_Hash String   @db.VarChar(255)
+  Role          String   @db.VarChar(50)
+  pegawai       pegawai  @relation(fields: [ID_Pegawai], references: [ID_Pegawai])
 
-model status_laundry {
-  id_status   Int              @id @default(autoincrement())
-  nama_status String           @unique @db.VarChar(30)
-  dibuat_pada DateTime         @default(now()) @db.Timestamp(6)
-  transaksi   transaksi[]
-  riwayat     riwayat_status[]
-}
-
-model riwayat_status {
-  id_riwayat        Int             @id @default(autoincrement())
-  id_transaksi      Int
-  status_id         Int?
-  status_sebelumnya String?         @db.VarChar(30)
-  status_baru       String          @db.VarChar(30)
-  changed_by        Int?
-  berubah_pada      DateTime        @default(now()) @db.Timestamp(6)
-  transaksi         transaksi       @relation(fields: [id_transaksi], references: [id_transaksi])
-  status_laundry    status_laundry? @relation(fields: [status_id], references: [id_status])
-  kasir             users?          @relation(fields: [changed_by], references: [id_user])
-
-  @@index([id_transaksi, berubah_pada])
-}
-
-model notifikasi {
-  id_notifikasi Int       @id @default(autoincrement())
-  id_user       Int
-  id_transaksi  Int
-  pesan         String    @db.VarChar(255)
-  dibuat_pada   DateTime  @default(now()) @db.Timestamp(6)
-  dibaca_pada   DateTime? @db.Timestamp(6)
-  users         users     @relation(fields: [id_user], references: [id_user])
-  transaksi     transaksi @relation(fields: [id_transaksi], references: [id_transaksi])
-
-  @@index([id_user, dibuat_pada])
-}
-
-model riwayat_koin {
-  id_riwayat_koin Int        @id @default(autoincrement())
-  id_user         Int
-  id_kasir        Int
-  id_transaksi    Int?
-  jumlah          Int
-  keterangan      String     @db.VarChar(255)
-  dibuat_pada     DateTime   @default(now()) @db.Timestamp(6)
-  users           users      @relation("CoinMember", fields: [id_user], references: [id_user])
-  kasir           users      @relation(fields: [id_kasir], references: [id_user], name: "CoinHandledBy")
-  transaksi       transaksi? @relation(fields: [id_transaksi], references: [id_transaksi])
-
-  @@index([id_user, dibuat_pada])
-}
-
-model pengambilan {
-  id_pengambilan  Int       @id @default(autoincrement())
-  id_transaksi    Int       @unique
-  diminta_oleh    Int
-  diminta_pada    DateTime  @default(now()) @db.Timestamp(6)
-  diproses_oleh   Int?
-  diserahkan_pada DateTime? @db.Timestamp(6)
-  transaksi       transaksi @relation(fields: [id_transaksi], references: [id_transaksi])
-  member          users     @relation("PickupRequestedBy", fields: [diminta_oleh], references: [id_user])
-  kasir           users?    @relation("PickupProcessedBy", fields: [diproses_oleh], references: [id_user])
+  @@unique([ID_Pegawai])
+  @@map("USERS")
 }

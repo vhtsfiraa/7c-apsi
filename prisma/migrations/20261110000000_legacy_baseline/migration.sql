@@ -1,0 +1,1 @@
+-- Baseline marker for the pre-existing legacy schema. No DDL is applied here.

@@ -16,7 +16,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 8;
 export type UserRole = "Member" | "Kasir";
 
 export type UserSession = {
-  userId: number;
+  userId: string;
   username: string;
   name: string;
   role: UserRole;
@@ -109,8 +109,8 @@ export function verifySessionToken(token: string): UserSession | null {
       typeof payload !== "object" ||
       payload === null ||
       !("userId" in payload) ||
-      typeof payload.userId !== "number" ||
-      !Number.isSafeInteger(payload.userId) ||
+      typeof payload.userId !== "string" ||
+      payload.userId.length === 0 ||
       !("username" in payload) ||
       typeof payload.username !== "string" ||
       !("name" in payload) ||

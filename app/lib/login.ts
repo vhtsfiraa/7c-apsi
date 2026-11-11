@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
   createSessionToken,
-  hashPassword,
   normalizeRole,
   SESSION_COOKIE,
   sessionCookieOptions,
@@ -14,116 +13,83 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeUsername(value: string) {
-  const trimmed = value.trim();
-  return /^[\d+\s().-]+$/.test(trimmed)
-    ? trimmed.replace(/\D/g, "")
-    : trimmed.toLowerCase();
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, "");
 }
 
 export async function handleLogin(
   request: Request,
-  expectedRole?: UserRole,
+  expectedRole: UserRole,
 ) {
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "Format login tidak valid." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Format login tidak valid." }, { status: 400 });
   }
-
   if (!isRecord(body)) {
-    return NextResponse.json(
-      { error: "Format login tidak valid." },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Format login tidak valid." }, { status: 400 });
   }
 
-  const username =
-    typeof body.username === "string" ? normalizeUsername(body.username) : "";
-  const password = typeof body.password === "string" ? body.password : "";
-  if (!username || !password || username.length > 50 || password.length > 128) {
-    return NextResponse.json(
-      { error: "Username atau password salah." },
-      { status: 401 },
-    );
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password.trim() : "";
+  if (!username || !password || username.length > 50 || password.length > 50) {
+    return NextResponse.json({ error: "Username atau password salah." }, { status: 401 });
   }
 
   try {
     const prisma = getPrismaClient();
-    const demoRole =
-      username === "member"
-        ? "Member"
-        : username === "kasir"
-          ? "Kasir"
-          : null;
-    const demoPassword = demoRole ? username : null;
+    let sessionUser: { userId: string; username: string; name: string; role: UserRole } | null = null;
 
-    let user = await prisma.users.findUnique({ where: { username } });
-    if (
-      !user &&
-      demoRole &&
-      (!expectedRole || expectedRole === demoRole) &&
-      password === demoPassword
-    ) {
-      try {
-        user = await prisma.users.create({
-          data: {
-            username,
-            nama: demoRole === "Member" ? "Member Demo" : "Kasir Demo",
-            role: demoRole,
-            password_hash: await hashPassword(password),
-          },
-        });
-      } catch (error) {
-        if (
-          !(error instanceof Error && "code" in error && error.code === "P2002")
-        ) {
-          throw error;
-        }
-        user = await prisma.users.findUnique({ where: { username } });
+    if (expectedRole === "Member") {
+      const member = await prisma.member.findUnique({
+        where: { ID_Member: username },
+      });
+      if (
+        member &&
+        member.No_HP &&
+        normalizePhone(member.No_HP) === normalizePhone(password)
+      ) {
+        sessionUser = {
+          userId: member.ID_Member,
+          username: member.ID_Member,
+          name: member.Nama_Member,
+          role: "Member",
+        };
+      }
+    } else {
+      const user = await prisma.users.findUnique({
+        where: { Username: username.toLowerCase() },
+        include: { pegawai: true },
+      });
+      const role = user ? normalizeRole(user.Role) : null;
+      if (
+        user &&
+        role === "Kasir" &&
+        user.pegawai.Peran.toLowerCase() === "kasir" &&
+        (await verifyPassword(password, user.Password_Hash))
+      ) {
+        sessionUser = {
+          userId: user.pegawai.ID_Pegawai,
+          username: user.Username,
+          name: user.pegawai.Nama_Pegawai,
+          role,
+        };
       }
     }
 
-    if (
-      user &&
-      demoRole &&
-      user.role.toLowerCase() === demoRole.toLowerCase() &&
-      user.password_hash === null &&
-      password === demoPassword
-    ) {
-      user = await prisma.users.update({
-        where: { id_user: user.id_user },
-        data: { password_hash: await hashPassword(password) },
-      });
+    if (!sessionUser) {
+      return NextResponse.json({ error: "Username atau password salah." }, { status: 401 });
     }
 
-    const role = user ? normalizeRole(user.role) : null;
-    if (
-      !user ||
-      !role ||
-      (expectedRole !== undefined && role !== expectedRole) ||
-      user.password_hash === null ||
-      !(await verifyPassword(password, user.password_hash))
-    ) {
-      return NextResponse.json(
-        { error: "Username atau password salah." },
-        { status: 401 },
-      );
-    }
-
-    const token = createSessionToken({
-      userId: user.id_user,
-      username: user.username,
-      name: user.nama,
-      role,
-    });
+    const token = createSessionToken(sessionUser);
     const response = NextResponse.json({
-      user: { username: user.username, name: user.nama, role },
-      redirectTo: role === "Kasir" ? "/kasir" : "/member",
+      user: {
+        username: sessionUser.username,
+        name: sessionUser.name,
+        role: sessionUser.role,
+      },
+      redirectTo: sessionUser.role === "Kasir" ? "/kasir" : "/member",
     });
     response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions);
     return response;

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { authorizeApiRole } from "@/app/lib/api-auth";
 import {
-  createInitialPassword,
-  hashPassword,
-} from "@/app/lib/auth";
+  createRecordId,
+  getMemberCoinBalance,
+} from "@/app/api/_lib/erd";
 import { getPrismaClient } from "@/app/lib/prisma";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -18,17 +18,22 @@ export async function GET() {
   const authorization = await authorizeApiRole("Kasir");
   if (authorization.response) return authorization.response;
   try {
-    const members = await getPrismaClient().users.findMany({
-      where: { role: { equals: "Member", mode: "insensitive" } },
-      orderBy: { nama: "asc" },
-      select: {
-        id_user: true,
-        nama: true,
-        username: true,
-        nomor_telepon: true,
-        koin_saldo: true,
-      },
+    const prisma = getPrismaClient();
+    const records = await prisma.member.findMany({
+      orderBy: { Nama_Member: "asc" },
     });
+    const members = await Promise.all(records.map(async (member) => ({
+      ID_Member: member.ID_Member,
+      Nama_Member: member.Nama_Member,
+      No_HP: member.No_HP,
+      id_user: member.ID_Member,
+      nama: member.Nama_Member,
+      username: member.ID_Member,
+      nomor_telepon: member.No_HP,
+      koin_saldo: await getMemberCoinBalance(prisma, member.ID_Member),
+      gender: member.Gender_Member,
+      tanggal_daftar: member.Tgl_Daftar,
+    })));
     return NextResponse.json({ members });
   } catch (error) {
     console.error("Gagal membaca data Member:", error);
@@ -48,46 +53,61 @@ export async function POST(request: Request) {
   if (!isRecord(body)) {
     return NextResponse.json({ error: "Data Member harus berupa objek." }, { status: 400 });
   }
-  const nama = typeof body.nama === "string" ? body.nama.trim() : "";
-  const phone = typeof body.nomor_telepon === "string" ? body.nomor_telepon.trim() : "";
-  const normalizedPhone = normalizePhone(phone);
-  if (!nama || nama.length > 100) {
-    return NextResponse.json({ error: "Nama lengkap wajib diisi (maksimal 100 karakter)." }, { status: 400 });
+
+  const nameValue = body.nama ?? body.Nama_Member;
+  const phoneValue = body.nomor_telepon ?? body.No_HP;
+  const name = typeof nameValue === "string" ? nameValue.trim() : "";
+  const phoneInput = typeof phoneValue === "string"
+    ? phoneValue.trim()
+    : "";
+  const phone = normalizePhone(phoneInput);
+  const genderValue = body.gender ?? body.Gender_Member;
+  if (!name || name.length > 100) {
+    return NextResponse.json(
+      { error: "Nama lengkap wajib diisi (maksimal 100 karakter)." },
+      { status: 400 },
+    );
   }
-  if (!/^\+?[\d\s().-]{8,24}$/.test(phone) || !/^\d{8,15}$/.test(normalizedPhone)) {
-    return NextResponse.json({ error: "Nomor HP harus berisi 8 sampai 15 digit yang valid." }, { status: 400 });
+  if (!/^\+?[\d\s().-]{8,24}$/.test(phoneInput) || !/^\d{8,15}$/.test(phone)) {
+    return NextResponse.json(
+      { error: "Nomor HP harus berisi 8 sampai 15 digit yang valid." },
+      { status: 400 },
+    );
   }
 
-  const password = createInitialPassword();
   try {
-    const member = await getPrismaClient().users.create({
+    const prisma = getPrismaClient();
+    if (await prisma.member.findFirst({ where: { No_HP: phone } })) {
+      return NextResponse.json({ error: "Nomor HP sudah terdaftar." }, { status: 409 });
+    }
+    const record = await prisma.member.create({
       data: {
-        nama,
-        username: normalizedPhone,
-        nomor_telepon: normalizedPhone,
-        role: "Member",
-        password_hash: await hashPassword(password),
-      },
-      select: {
-        id_user: true,
-        nama: true,
-        username: true,
-        nomor_telepon: true,
-        role: true,
+        ID_Member: createRecordId("MBR-", 20),
+        Nama_Member: name,
+        No_HP: phone,
+        Gender_Member: typeof genderValue === "string" ? genderValue.trim().slice(0, 20) || null : null,
       },
     });
+    const member = {
+      ID_Member: record.ID_Member,
+      Nama_Member: record.Nama_Member,
+      No_HP: record.No_HP,
+      id_user: record.ID_Member,
+      nama: record.Nama_Member,
+      username: record.ID_Member,
+      nomor_telepon: record.No_HP,
+      role: "Member",
+      koin_saldo: 0,
+    };
     return NextResponse.json(
       {
         member,
-        credentials: { username: member.username, password },
-        message: "Member berhasil ditambahkan. Simpan password awal ini.",
+        credentials: { username: record.ID_Member, password: record.No_HP },
+        message: "Member berhasil ditambahkan.",
       },
       { status: 201 },
     );
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "P2002") {
-      return NextResponse.json({ error: "Nomor HP sudah terdaftar." }, { status: 409 });
-    }
     console.error("Gagal menambahkan Member:", error);
     return NextResponse.json({ error: "Data Member gagal disimpan." }, { status: 500 });
   }

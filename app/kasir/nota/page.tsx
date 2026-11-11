@@ -5,15 +5,28 @@ import { getPrismaClient } from "@/app/lib/prisma";
 
 export const instant = false;
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function KasirReceiptListPage() {
   const cashier = await requireRole("Kasir");
   const transactions = await getPrismaClient().transaksi.findMany({
-    orderBy: { tanggal: "desc" },
+    where: laundryTransactionFilter,
+    orderBy: { Tgl_Jam_Transaksi: "desc" },
     select: {
-      id_transaksi: true,
-      nama_barang: true,
-      tanggal: true,
-      users: { select: { nama: true } },
+      Kode_Transaksi: true,
+      Catatan_Pakaian: true,
+      Tgl_Jam_Transaksi: true,
+      member: { select: { Nama_Member: true } },
     },
   });
 
@@ -37,7 +50,7 @@ export default async function KasirReceiptListPage() {
                 <th className="px-3 py-3 font-medium">Kode</th>
                 <th className="px-3 py-3 font-medium">Tanggal</th>
                 <th className="px-3 py-3 font-medium">Member</th>
-                <th className="px-3 py-3 font-medium">Paket</th>
+                <th className="px-3 py-3 font-medium">Catatan Pakaian</th>
                 <th className="px-3 py-3 font-medium">Nota</th>
               </tr>
             </thead>
@@ -45,24 +58,22 @@ export default async function KasirReceiptListPage() {
               {transactions.map((transaction) => (
                 <tr
                   className="border-t border-[#e2e8f0]"
-                  key={transaction.id_transaksi}
+                  key={transaction.Kode_Transaksi}
                 >
+                  <td className="px-3 py-3">{transaction.Kode_Transaksi}</td>
                   <td className="px-3 py-3">
-                    TRX-{String(transaction.id_transaksi).padStart(6, "0")}
-                  </td>
-                  <td className="px-3 py-3">
-                    {transaction.tanggal.toLocaleDateString("id-ID", {
+                    {transaction.Tgl_Jam_Transaksi.toLocaleDateString("id-ID", {
                       day: "2-digit",
                       month: "short",
                       year: "numeric",
                     })}
                   </td>
-                  <td className="px-3 py-3">{transaction.users.nama}</td>
-                  <td className="px-3 py-3">{transaction.nama_barang}</td>
+                  <td className="px-3 py-3">{transaction.member.Nama_Member}</td>
+                  <td className="px-3 py-3">{transaction.Catatan_Pakaian ?? "—"}</td>
                   <td className="px-3 py-3">
                     <Link
                       className="font-semibold text-[#2563eb] hover:underline"
-                      href={`/kasir/nota/${transaction.id_transaksi}`}
+                      href={`/kasir/nota/${encodeURIComponent(transaction.Kode_Transaksi)}`}
                     >
                       Buka Nota
                     </Link>
@@ -71,11 +82,8 @@ export default async function KasirReceiptListPage() {
               ))}
               {transactions.length === 0 && (
                 <tr>
-                  <td
-                    className="px-3 py-6 text-center text-[#64748b]"
-                    colSpan={5}
-                  >
-                    Belum ada transaksi untuk dicetak.
+                  <td className="px-3 py-6 text-center text-[#64748b]" colSpan={5}>
+                    Belum ada transaksi laundry untuk dicetak.
                   </td>
                 </tr>
               )}

@@ -5,7 +5,7 @@ import { useState, type FormEvent } from "react";
 
 type MemberFormProps = {
   member?: {
-    id_user: number;
+    id_member: string;
     nama: string;
     nomor_telepon: string | null;
   };
@@ -35,7 +35,7 @@ export function MemberForm({ member }: MemberFormProps) {
     };
     try {
       const response = await fetch(
-        isEdit ? `/api/members/${member?.id_user}` : "/api/members",
+        isEdit ? `/api/members/${encodeURIComponent(member?.id_member ?? "")}` : "/api/members",
         {
           method: isEdit ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
@@ -101,8 +101,8 @@ export function MemberForm({ member }: MemberFormProps) {
           <p>{result.message}</p>
           {result.credentials && (
             <>
-              <p>Username: <strong>{result.credentials.username}</strong></p>
-              <p>Password awal: <strong>{result.credentials.password}</strong></p>
+              <p>ID Member: <strong>{result.credentials.username}</strong></p>
+              <p>No. HP: <strong>{result.credentials.password}</strong></p>
             </>
           )}
         </section>

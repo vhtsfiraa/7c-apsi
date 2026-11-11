@@ -1,5 +1,5 @@
 import { authorizeApiRole } from "@/app/lib/api-auth";
-import { ensureLaundryStatuses } from "@/app/lib/laundry";
+import { ensureLaundryStatuses } from "@/app/api/_lib/erd";
 import { getPrismaClient } from "@/app/lib/prisma";
 
 export async function GET() {

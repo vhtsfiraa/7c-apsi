@@ -16,44 +16,51 @@ type ReceiptPageProps = {
   params: Promise<{ id: string }>;
 };
 
-export default async function KasirReceiptPage({ params }: ReceiptPageProps) {
-  const cashier = await requireRole("Kasir");
-  const { id } = await params;
-  const transactionId = Number(id);
-  if (
-    !/^[1-9]\d*$/.test(id) ||
-    !Number.isSafeInteger(transactionId) ||
-    transactionId > 2_147_483_647
-  ) {
-    notFound();
-  }
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
 
-  const transaction = await getPrismaClient().transaksi.findUnique({
-    where: { id_transaksi: transactionId },
+export default async function KasirReceiptPage({ params }: ReceiptPageProps) {
+  await requireRole("Kasir");
+  const { id } = await params;
+  if (!id || id.length > 30) notFound();
+
+  const transaction = await getPrismaClient().transaksi.findFirst({
+    where: { AND: [{ Kode_Transaksi: id }, laundryTransactionFilter] },
     select: {
-      id_transaksi: true,
-      nama_barang: true,
-      jumlah: true,
-      berat_kg: true,
-      harga_satuan: true,
-      total_bayar: true,
-      diskon_persen: true,
-      koin_dipakai: true,
-      tanggal: true,
-      users: {
+      Kode_Transaksi: true,
+      Catatan_Pakaian: true,
+      Total_Berat_Kg: true,
+      Harga_Per_Kg: true,
+      Koin_Didapat: true,
+      Koin_Ditukar: true,
+      Nilai_Per_Koin: true,
+      Tgl_Jam_Transaksi: true,
+      member: {
         select: {
-          nama: true,
-          username: true,
+          ID_Member: true,
+          Nama_Member: true,
+          No_HP: true,
         },
       },
+      pegawaiKasir: { select: { Nama_Pegawai: true } },
+      pegawaiSupervisor: { select: { Nama_Pegawai: true } },
     },
   });
   if (!transaction) notFound();
 
   const total =
-    transaction.total_bayar ??
-    Number(transaction.harga_satuan) *
-      (transaction.berat_kg ? Number(transaction.berat_kg) : transaction.jumlah);
+    Number(transaction.Total_Berat_Kg ?? 0) *
+    (transaction.Harga_Per_Kg ?? 0) *
+    (transaction.Koin_Ditukar ? 0.75 : 1);
 
   return (
     <main className="min-h-screen bg-[#f4f7fb] px-4 py-8 text-[#0f172a] sm:px-8">
@@ -65,50 +72,55 @@ export default async function KasirReceiptPage({ params }: ReceiptPageProps) {
         <h1 className="mt-1 text-xl font-bold" id="receipt-title">
           Nota Transaksi
         </h1>
-        <p className="mt-1 text-sm text-[#64748b]">
-          TRX-{String(transaction.id_transaksi).padStart(6, "0")}
-        </p>
+        <p className="mt-1 text-sm text-[#64748b]">{transaction.Kode_Transaksi}</p>
 
         <dl className="mt-6 grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 border-y border-dashed border-[#cbd5e1] py-5 text-sm">
           <dt className="text-[#64748b]">Tanggal</dt>
           <dd className="text-right">
-            {transaction.tanggal.toLocaleString("id-ID")}
+            {transaction.Tgl_Jam_Transaksi.toLocaleString("id-ID")}
           </dd>
           <dt className="text-[#64748b]">Member</dt>
           <dd className="text-right">
-            {transaction.users.nama} ({transaction.users.username})
+            {transaction.member.Nama_Member} ({transaction.member.ID_Member})
           </dd>
-          <dt className="text-[#64748b]">Pakaian / Paket</dt>
-          <dd className="text-right">{transaction.nama_barang}</dd>
-          <dt className="text-[#64748b]">Jumlah</dt>
+          <dt className="text-[#64748b]">No. HP</dt>
+          <dd className="text-right">{transaction.member.No_HP ?? "—"}</dd>
+          <dt className="text-[#64748b]">Catatan Pakaian</dt>
+          <dd className="text-right">{transaction.Catatan_Pakaian ?? "—"}</dd>
+          <dt className="text-[#64748b]">Berat</dt>
           <dd className="text-right">
-            {transaction.berat_kg
-              ? `${transaction.berat_kg.toString()} kg`
-              : `${transaction.jumlah} pcs`}
+            {transaction.Total_Berat_Kg
+              ? `${transaction.Total_Berat_Kg.toString()} kg`
+              : "—"}
           </dd>
-          <dt className="text-[#64748b]">Harga Satuan</dt>
+          <dt className="text-[#64748b]">Harga per Kg</dt>
           <dd className="text-right">
-            {currency.format(Number(transaction.harga_satuan))}
+            {transaction.Harga_Per_Kg === null
+              ? "—"
+              : currency.format(transaction.Harga_Per_Kg)}
           </dd>
-          {transaction.diskon_persen > 0 && (
-            <>
-              <dt className="text-[#64748b]">
-                Diskon {transaction.diskon_persen}% ({transaction.koin_dipakai} koin)
-              </dt>
-              <dd className="text-right text-emerald-700">
-                Koin ditukarkan
-              </dd>
-            </>
-          )}
           <dt className="font-semibold">Total</dt>
-          <dd className="text-right font-semibold">
-            {currency.format(Number(total))}
+          <dd className="text-right font-semibold">{currency.format(total)}</dd>
+          <dt className="text-[#64748b]">Koin diperoleh</dt>
+          <dd className="text-right">{transaction.Koin_Didapat ?? 0}</dd>
+          <dt className="text-[#64748b]">Koin ditukarkan</dt>
+          <dd className="text-right">{transaction.Koin_Ditukar ?? 0}</dd>
+          <dt className="text-[#64748b]">Nilai per Koin</dt>
+          <dd className="text-right">
+            {transaction.Nilai_Per_Koin === null
+              ? "—"
+              : currency.format(transaction.Nilai_Per_Koin)}
           </dd>
         </dl>
 
         <p className="mt-5 text-xs text-[#64748b]">
-          Dilayani oleh {cashier.name}
+          Dilayani oleh {transaction.pegawaiKasir.Nama_Pegawai}
         </p>
+        {transaction.pegawaiSupervisor && (
+          <p className="mt-1 text-xs text-[#64748b]">
+            Supervisor: {transaction.pegawaiSupervisor.Nama_Pegawai}
+          </p>
+        )}
         <div className="mt-6 flex flex-wrap items-center gap-4 print:hidden">
           <PrintButton />
           <Link

@@ -61,28 +61,28 @@ export function LoginForm({ role }: LoginFormProps) {
       </h2>
       <div className="fields">
         <label className="field" htmlFor={`${role}-username`}>
-          <span>Username</span>
+          <span>{role === "Member" ? "ID Member" : "Username"}</span>
           <input
-            autoComplete="username"
+            autoComplete={role === "Member" ? "off" : "username"}
             id={`${role}-username`}
             name="username"
             onChange={(event) => setUsername(event.target.value)}
-            placeholder="Masukkan username"
+            placeholder={role === "Member" ? "Masukkan ID Member" : "Masukkan username"}
             required
             type="text"
             value={username}
           />
         </label>
         <label className="field" htmlFor={`${role}-password`}>
-          <span>Password</span>
+          <span>{role === "Member" ? "No. HP" : "Password"}</span>
           <input
-            autoComplete="current-password"
+            autoComplete={role === "Member" ? "tel" : "current-password"}
             id={`${role}-password`}
             name="password"
             onChange={(event) => setPassword(event.target.value)}
             placeholder="Masukkan password"
             required
-            type="password"
+            type={role === "Member" ? "tel" : "password"}
             value={password}
           />
         </label>

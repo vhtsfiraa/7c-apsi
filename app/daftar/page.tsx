@@ -86,12 +86,14 @@ export default function RegisterPage() {
           <section aria-live="polite" className="auth-success" role="status">
             <p>{result.message}</p>
             <p>
-              Username: <strong>{result.credentials.username}</strong>
+              Member ID: <strong>{result.credentials.username}</strong>
             </p>
             <p>
-              Password awal: <strong>{result.credentials.password}</strong>
+              No. HP: <strong>{result.credentials.password}</strong>
             </p>
-            <p>Simpan password ini. Demi keamanan, password tidak ditampilkan lagi setelah meninggalkan halaman.</p>
+            <p>
+              Gunakan ID Member dan nomor HP ini untuk identifikasi saat menggunakan layanan.
+            </p>
           </section>
         )}
         <button

@@ -11,19 +11,35 @@ const currency = new Intl.NumberFormat("id-ID", {
   maximumFractionDigits: 0,
 });
 
+const laundryTransactionFilter = {
+  OR: [
+    { Catatan_Pakaian: null },
+    {
+      AND: [
+        { NOT: { Catatan_Pakaian: { startsWith: "Migrasi riwayat koin:" } } },
+        { NOT: { Catatan_Pakaian: { startsWith: "Penyesuaian saldo koin saat migrasi skema ERD." } } },
+      ],
+    },
+  ],
+};
+
 export default async function MemberTransactionHistoryPage() {
   const member = await requireRole("Member");
+  const prisma = getPrismaClient();
   const [profile, transactions] = await Promise.all([
-    getPrismaClient().users.findUnique({
-      where: { id_user: member.userId },
-      select: { id_user: true, nama: true },
+    prisma.member.findUnique({
+      where: { ID_Member: member.userId },
+      select: { ID_Member: true, Nama_Member: true },
     }),
-    getPrismaClient().transaksi.findMany({
-      where: { id_user: member.userId },
-      orderBy: { tanggal: "desc" },
+    prisma.transaksi.findMany({
+      where: { AND: [{ ID_Member: member.userId }, laundryTransactionFilter] },
+      orderBy: { Tgl_Jam_Transaksi: "desc" },
       include: {
-        status_laundry: { select: { nama_status: true } },
-        pengambilan: true,
+        statusProses: {
+          orderBy: { Waktu_Status: "desc" },
+          take: 1,
+          include: { status: true },
+        },
       },
     }),
   ]);
@@ -32,7 +48,7 @@ export default async function MemberTransactionHistoryPage() {
   return (
     <DashboardShell
       heading="Riwayat Transaksi"
-      identity={`${profile.nama} · MBR-${String(profile.id_user).padStart(3, "0")}`}
+      identity={`${profile.Nama_Member} · ${profile.ID_Member}`}
       activeHref="/member/riwayat"
       role="Member"
     >
@@ -49,8 +65,8 @@ export default async function MemberTransactionHistoryPage() {
               <tr>
                 <th className="px-3 py-3 font-medium">Kode</th>
                 <th className="px-3 py-3 font-medium">Tanggal</th>
-                <th className="px-3 py-3 font-medium">Layanan / Barang</th>
-                <th className="px-3 py-3 font-medium">Berat / Jumlah</th>
+                <th className="px-3 py-3 font-medium">Catatan Pakaian</th>
+                <th className="px-3 py-3 font-medium">Berat</th>
                 <th className="px-3 py-3 font-medium">Total Bayar</th>
                 <th className="px-3 py-3 font-medium">Status</th>
                 <th className="px-3 py-3 font-medium">Rincian</th>
@@ -59,32 +75,35 @@ export default async function MemberTransactionHistoryPage() {
             <tbody>
               {transactions.map((transaction) => {
                 const total =
-                  transaction.total_bayar ??
-                  Number(transaction.harga_satuan) * transaction.jumlah;
+                  Number(transaction.Total_Berat_Kg ?? 0) *
+                  (transaction.Harga_Per_Kg ?? 0) *
+                  (transaction.Koin_Ditukar ? 0.75 : 1);
                 return (
-                  <tr className="border-t border-[#e2e8f0]" key={transaction.id_transaksi}>
+                  <tr
+                    className="border-t border-[#e2e8f0]"
+                    key={transaction.Kode_Transaksi}
+                  >
+                    <td className="px-3 py-3">{transaction.Kode_Transaksi}</td>
                     <td className="px-3 py-3">
-                      TRX-{String(transaction.id_transaksi).padStart(6, "0")}
+                      {transaction.Tgl_Jam_Transaksi.toLocaleDateString("id-ID")}
                     </td>
                     <td className="px-3 py-3">
-                      {transaction.tanggal.toLocaleDateString("id-ID")}
+                      {transaction.Catatan_Pakaian ?? "—"}
                     </td>
                     <td className="px-3 py-3">
-                      {transaction.jenis_layanan ?? transaction.nama_barang}
+                      {transaction.Total_Berat_Kg
+                        ? `${transaction.Total_Berat_Kg.toString()} kg`
+                        : "—"}
                     </td>
+                    <td className="px-3 py-3">{currency.format(total)}</td>
                     <td className="px-3 py-3">
-                      {transaction.berat_kg
-                        ? `${transaction.berat_kg.toString()} kg`
-                        : `${transaction.jumlah} pcs`}
-                    </td>
-                    <td className="px-3 py-3">{currency.format(Number(total))}</td>
-                    <td className="px-3 py-3">
-                      {transaction.status_laundry?.nama_status ?? "Belum ditetapkan"}
+                      {transaction.statusProses[0]?.status.Nama_Status ??
+                        "Belum ditetapkan"}
                     </td>
                     <td className="px-3 py-3">
                       <Link
                         className="font-semibold text-[#2563eb] hover:underline"
-                        href={`/member/transaksi/${transaction.id_transaksi}`}
+                        href={`/member/transaksi/${encodeURIComponent(transaction.Kode_Transaksi)}`}
                       >
                         Lihat Status
                       </Link>
